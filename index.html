@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Mesa | Roteirização e Custo V7</title>
+<title>Mesa | Roteirização e Custo V8</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{--navy:#083b6f;--blue:#0b5fa5;--light:#eef5fb;--orange:#f47c20;--green:#138a4b;--red:#c0392b;--text:#17324d;--line:#d7e4ef}
@@ -36,7 +36,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <body>
 <header>
   <h1>Mesa de Contratação | Roteirização e Custo</h1>
-  <p>V7: KM real Google → menor percurso → Tabela Mundial fixa → custo automático</p>
+  <p>V8: KM real Google → menor percurso → fixo até 100 km + KM excedente</p>
 </header>
 <div class="wrap">
 <div class="grid">
@@ -53,7 +53,10 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 
   <div class="sep"></div>
   <h2>2. Precificação</h2>
-  <div class="status"><b>Tabela Mundial embutida — Fiorino</b><br>Até 100 km: <b>R$ 320,00</b><br>Acima de 100 km: R$ 320,00 + KM excedente × tarifa da UF.<br><span class="small">Ex.: SP = R$ 2,56 por km excedente.</span></div>
+  <div class="status"><b>Tabela Mundial embutida — Fiorino</b><br>
+  <b>0 a 100 km:</b> R$ 320,00<br>
+  <b>Acima de 100 km:</b> R$ 320,00 + (KM total − 100) × tarifa excedente da UF.<br>
+  <span class="small">Exemplo SP: 330 km → 230 km excedentes → R$ 320 + (230 × R$ 2,56) = <b>R$ 908,80</b>.</span></div>
 
   <div class="row2">
     <div>
@@ -109,7 +112,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     <h2>Rotas processadas</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM</th><th>R$/km ref.</th><th>Custo</th><th>Custo/entrega</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM total</th><th>Fixo até 100 km</th><th>KM excedente</th><th>R$/km excedente</th><th>Custo</th><th>Custo/entrega</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -162,7 +165,7 @@ function tariffFor(km,uf,vehicle){
   const excessKm=Math.max(0,km-t.baseKm);
   const value=t.fixed + excessKm*excessRate;
   return {value,fixed:t.fixed,baseKm:t.baseKm,excessKm,excessRate,
-    base:`Tabela Mundial fixa | até ${t.baseKm} km = R$ ${t.fixed.toFixed(2)} | excedente ${excessKm.toFixed(1)} km × R$ ${excessRate.toFixed(2)}/${norm(uf)}`};
+    base:`Até ${t.baseKm} km: R$ ${t.fixed.toFixed(2)} | Excedente: ${excessKm.toFixed(1)} km × R$ ${excessRate.toFixed(2)}/km (${norm(uf)}) | Total tabela: R$ ${value.toFixed(2)}`};
 }
 const $=id=>document.getElementById(id);
 const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(n||0);
@@ -334,7 +337,10 @@ function render(){
       ${['FIORINO','VAN','VUC','3/4','TOCO','TRUCK','CARRETA'].map(v=>`<option ${v===r.vehicle?'selected':''}>${v}</option>`).join('')}
     </select></td>
     <td><input type="number" min="1" value="${r.deliveries||1}" onchange="changeDeliveries(${i},this.value)" style="width:70px;padding:5px"></td>
-    <td>${r.stores??''}</td><td>${r.sequence||''}</td><td>${num(r.km)}</td><td>${money(r.rate)}</td><td><b>${money(r.cost)}</b></td>
+    <td>${r.stores??''}</td><td>${r.sequence||''}</td><td>${num(r.km)}</td><td>${r.tableFixed?money(r.tableFixed):'-'}</td>
+    <td>${r.pricingMode==='TABELA MUNDIAL'?num(r.excessKm):'-'}</td>
+    <td>${r.pricingMode==='TABELA MUNDIAL'?money(r.excessRate):'-'}</td>
+    <td><b>${money(r.cost)}</b></td>
     <td>${money(r.costPerDelivery)}</td><td>${r.pricingMode||''}</td><td><span class="badge">${r.confidence||''}</span></td><td>${r.costBase||''}</td>
     <td class="${r.status==='OK'?'ok':'warn'}">${r.status}</td></tr>`).join('');
   const ok=results.filter(x=>x.status==='OK'), km=ok.reduce((a,b)=>a+b.km,0), cost=ok.reduce((a,b)=>a+b.cost,0);
@@ -357,7 +363,7 @@ window.changeDeliveries=(i,q)=>{
 };
 window.showRoute=i=>{
   const r=results[i]; if(!r?.directions)return; directionsRenderer.setDirections(r.directions);
-  $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} entregas | ${num(r.km)} km | <b>${money(r.cost)}</b> | ${money(r.costPerDelivery)}/entrega | ${r.costBase}`;
+  $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} entregas | ${num(r.km)} km | <b>${money(r.cost)}</b> | ${money(r.costPerDelivery)}/entrega<br><b>Cálculo:</b> ${r.costBase}`;
 };
 
 ensureDefaultPass().then(loadSavedConfig);
@@ -409,7 +415,7 @@ $('calcBtn').onclick=async()=>{
 $('exportBtn').onclick=()=>{
   const data=results.map(r=>({
     ROTA:r.route,DIA:r.day,UF:r.uf,VEICULO:r.vehicle,'QTD ENTREGA':r.deliveries,FORNECEDOR:r.supplier,LOJAS:r.stores,'CIDADES/REGIÃO':r.cities,
-    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'R$/KM REFERÊNCIA':r.rate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'MODO PRECIFICAÇÃO':r.pricingMode,'FIXO ATÉ 100 KM':r.tableFixed,'KM EXCEDENTE':r.excessKm,'R$/KM EXCEDENTE':r.excessRate,'R$/KM HISTÓRICO COMPARATIVO':r.historicalRate,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
+    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'FIXO ATÉ 100 KM':r.tableFixed,'KM EXCEDENTE':r.excessKm,'R$/KM EXCEDENTE':r.excessRate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'MODO PRECIFICAÇÃO':r.pricingMode,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
   }));
   const ws=XLSX.utils.json_to_sheet(data), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rotas Roteirizadas');
   XLSX.writeFile(wb,'Rotas_Roteirizadas_Mesa.xlsx');
