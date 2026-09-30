@@ -36,7 +36,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <body>
 <header>
   <h1>Mesa de Contratação | Montagem Automática de Rotas</h1>
-  <p>V9: planilha crua → filtro por UF → montagem automática das rotas → KM Google → custo</p>
+  <p>V10: planilha crua → filtro por UF → montagem automática → validação de endereços → KM Google → custo</p>
 </header>
 <div class="wrap">
 <div class="grid">
@@ -62,7 +62,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     </div>
   </div>
 
-  <div id="rawSummary" class="status">Carregue a planilha para visualizar as UFs disponíveis.</div>
+  <div id="rawSummary" class="status">Carregue a planilha para visualizar as UFs disponíveis. A V10 usa o endereço da base de cada linha como origem.</div>
   <input id="origin" type="hidden" value=""/>
 
   <div class="sep"></div>
@@ -119,7 +119,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     <h2>Mapa da rota selecionada</h2>
     <div id="map"></div>
     <div id="routeSummary" class="small" style="margin-top:8px">Clique em uma rota após o processamento.</div>
-    <div class="small" style="margin-top:6px"><b>Regra V9:</b> a UF é identificada pelo CEP. As entregas são agrupadas por base + UF e aproximadas por CEP; depois o Google otimiza a sequência dentro de cada rota. Uma rota nunca mistura UFs.</div>
+    <div class="small" style="margin-top:6px"><b>Regra V10:</b> a UF é identificada pelo CEP. As entregas são agrupadas por base + UF e aproximadas por CEP; depois o Google otimiza a sequência dentro de cada rota. Uma rota nunca mistura UFs.</div>
   </div>
 
   <div class="card" style="margin-top:12px">
@@ -304,7 +304,10 @@ async function chooseLinearRoute(origin,stops){
 }
 function directions(req){return new Promise((resolve,reject)=>directionsService.route(req,(r,s)=>s==='OK'?resolve(r):reject(new Error(s))))}
 async function calcRoute(row,idx){
-  const origin=$('origin').value.trim(), stops=parseCities(row.cities,row.uf); if(!stops.length)throw new Error('Sem cidades');
+  const origin=(row.origin||'').trim();
+  const stops=(row.stops&&row.stops.length)?row.stops:parseCities(row.cities,row.uf);
+  if(!origin)throw new Error('ORIGEM NÃO ENCONTRADA');
+  if(!stops.length)throw new Error('SEM DESTINOS');
   const returnToOrigin=$('roundTrip').checked;
   let destination, waypoints=[];
   if(returnToOrigin){
@@ -330,7 +333,7 @@ async function calcRoute(row,idx){
     const order=rt.waypoint_order||waypoints.map((_,i)=>i);
     orderedStops=order.map(i=>mids[i]).concat(destination);
   }
-  const km=meters/1000;
+  const km=Math.round((meters/1000)*10)/10;
   const vehicle=row.vehicle || $('vehicleType').value;
   const deliveries=Math.max(1, Number(row.deliveries || $('deliveryQty').value || stops.length || 1));
   const rr=rateFor(km,row.uf,vehicle), tariff=tariffFor(km,row.uf,vehicle), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
@@ -346,7 +349,7 @@ async function calcRoute(row,idx){
 }
 function render(){
   $('tbody').innerHTML=results.map((r,i)=>`<tr>
-    <td><span class="routeLink" onclick="showRoute(${i})">${r.route}</span></td><td>${r.day??''}</td><td>${r.uf??''}</td>
+    <td><span class="routeLink" onclick="showRoute(${i})">${r.route}</span></td><td>${r.supplier??''}</td><td>${r.uf??''}</td>
     <td><select onchange="changeVehicle(${i},this.value)" style="min-width:90px;padding:5px">
       ${['FIORINO','VAN','VUC','3/4','TOCO','TRUCK','CARRETA'].map(v=>`<option ${v===r.vehicle?'selected':''}>${v}</option>`).join('')}
     </select></td>
@@ -418,8 +421,14 @@ function ufFromCep(v){
   for(const [uf,a,b] of ranges)if(n>=a&&n<=b)return uf;
   return '';
 }
+function normalizeBaseAddress(v){
+  let s=String(v||'').trim();
+  // The supplied base field often comes as Rua-CEP-Bairro-Cidade-UF.
+  // Replacing separators gives Google a more conventional address string.
+  return s.replace(/-/g,', ').replace(/\s*,\s*/g,', ') + (s ? ', Brasil' : '');
+}
 function fullAddress(r){
-  return [r.address,r.neighborhood,r.city,r.uf,r.cep,'Brasil'].filter(Boolean).join(', ');
+  return [r.address,r.neighborhood,r.city,r.uf,onlyDigits(r.cep),'Brasil'].filter(Boolean).join(', ');
 }
 function buildAutoRoutes(rows,maxStops){
   const groups={};
@@ -477,7 +486,7 @@ $('loadBtn').onclick=async()=>{
         cep:cep,
         uf:uf,
         baseName:pick(r,['BASE DE RETIRADA','BASE RETIRADA']),
-        baseAddress:pick(r,['ENDEREÇO DA BASE','ENDERECO DA BASE'])
+        baseAddress:normalizeBaseAddress(pick(r,['ENDEREÇO DA BASE','ENDERECO DA BASE']))
       };
     }).filter(r=>r.address&&r.city&&r.cep&&r.uf&&r.baseAddress);
     if(!rawRows.length)throw new Error('Não encontrei linhas válidas com endereço, cidade, CEP e endereço da base.');
@@ -501,7 +510,10 @@ $('calcBtn').onclick=async()=>{
     for(let i=0;i<routeRows.length;i++){
       setStatus(`Roteirizando ${i+1}/${routeRows.length}: ${routeRows[i].route}...`);
       try{results.push(await calcRoute(routeRows[i],i));}
-      catch(e){results.push({...routeRows[i],idx:i,status:'ERRO: '+e.message,km:0,rate:0,cost:0,sequence:''});}
+      catch(e){
+        const msg=String(e.message||e);
+        results.push({...routeRows[i],idx:i,status:'ERRO: '+msg,km:0,rate:0,cost:0,sequence:''});
+      }
       render();
       await new Promise(r=>setTimeout(r,180));
     }
