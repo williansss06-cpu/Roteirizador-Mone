@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Mesa | Roteirização e Custo V6</title>
+<title>Mesa | Roteirização e Custo V7</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{--navy:#083b6f;--blue:#0b5fa5;--light:#eef5fb;--orange:#f47c20;--green:#138a4b;--red:#c0392b;--text:#17324d;--line:#d7e4ef}
@@ -36,7 +36,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <body>
 <header>
   <h1>Mesa de Contratação | Roteirização e Custo</h1>
-  <p>V6: KM real Google → menor percurso → Tabela Mundial fixa → histórico comparativo</p>
+  <p>V7: KM real Google → menor percurso → Tabela Mundial fixa → custo automático</p>
 </header>
 <div class="wrap">
 <div class="grid">
@@ -54,9 +54,6 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
   <div class="sep"></div>
   <h2>2. Precificação</h2>
   <div class="status"><b>Tabela Mundial embutida — Fiorino</b><br>Até 100 km: <b>R$ 320,00</b><br>Acima de 100 km: R$ 320,00 + KM excedente × tarifa da UF.<br><span class="small">Ex.: SP = R$ 2,56 por km excedente.</span></div>
-  <label>Base histórica de fretes por veículo (.xlsx) — opcional</label>
-  <input id="historyFile" type="file" accept=".xlsx,.xls"/>
-  <div class="small">Se enviada, o sistema procura o mesmo veículo + UF e KM semelhante. Exige amostra mais robusta, amplia a janela quando necessário e limita outliers antes de calcular a mediana. Assim, um único frete caro não vira referência. A quantidade de entregas não multiplica o frete.</div>
 
   <div class="row2">
     <div>
@@ -220,19 +217,7 @@ function parseCities(v,uf){
   return String(v||'').split(/[,;|]/).map(x=>x.trim()).filter(Boolean).map(c=>`${c}, ${uf||'SP'}, Brasil`);
 }
 function kmBand(km){ if(km<=100)return '0-100'; if(km<=250)return '101-250'; if(km<=500)return '251-500'; if(km<=750)return '501-750'; if(km<=1000)return '751-1000'; if(km<=1500)return '1001-1500'; if(km<=2000)return '1501-2000'; return '2000+'; }
-async function buildHistory(){
-  historyRates=[]; historyObs=[];
-  const f=$('historyFile').files[0]; if(!f)return;
-  const rows=await readExcel(f);
-  for(const r of rows){
-    const vehicle=norm(pick(r,['VEICULO','VEÍCULO','TIPO VEICULO']));
-    const uf=norm(pick(r,['UF','ESTADO']));
-    const km=nval(pick(r,['KM','QUILOMETRAGEM','DISTANCIA','DISTÂNCIA']));
-    const paid=nval(pick(r,['FRETE PAGO CONSIDERADO','FRETE PAGO','VALOR PAGO','VALORES','VALOR']));
-    if(!vehicle || !Number.isFinite(km) || km<=0 || !Number.isFinite(paid) || paid<=0) continue;
-    historyObs.push({vehicle,uf:uf||'TODOS',km,paid,rate:paid/km});
-  }
-}
+async function buildHistory(){ historyRates=[]; historyObs=[]; }
 function median(a){
   if(!a.length)return NaN;
   const s=[...a].sort((x,y)=>x-y), m=Math.floor(s.length/2);
@@ -272,7 +257,7 @@ function rateFor(km,uf,vehicle){
       };
     }
   }
-  return {rate:nval($('fallbackRate').value)||0,n:0,confidence:'FALLBACK',base:`R$/km padrão (${vehicle}) | sem amostra histórica suficiente`};
+  return {rate:nval($('fallbackRate').value)||0,n:0,confidence:'FALLBACK',base:`R$/km padrão configurado (${vehicle})`};
 }
 async function chooseLinearRoute(origin,stops){
   // V5 não usa Geocoding API. Testa cada parada como possível destino final
@@ -404,8 +389,7 @@ $('loadBtn').onclick=async()=>{
       deliveries:nval(pick(r,['QTD ENTREGA','QTD ENTREGAS','QUANTIDADE ENTREGA','ENTREGAS']))||nval($('deliveryQty').value)||1,
       cities:pick(r,['CIDADES/REGIÃO','CIDADES/REGIAO','CIDADES','REGIAO'])
     })).filter(r=>r.cities);
-    await buildHistory();
-    $('calcBtn').disabled=!routeRows.length; setStatus(`${routeRows.length} rotas carregadas. ${historyObs.length?historyObs.length+' fretes históricos válidos reconhecidos.':'Usando R$/km padrão até carregar histórico.'}`);
+    $('calcBtn').disabled=!routeRows.length; setStatus(`${routeRows.length} rotas carregadas. Tabela Mundial fixa pronta para cálculo.`);
   }catch(e){setStatus('Erro: '+e.message)}
 };
 $('calcBtn').onclick=async()=>{
