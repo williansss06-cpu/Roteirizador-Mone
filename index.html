@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Mesa | Roteirização e Custo por Veículo</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{--navy:#083b6f;--blue:#0b5fa5;--light:#eef5fb;--orange:#f47c20;--green:#138a4b;--red:#c0392b;--text:#17324d;--line:#d7e4ef}
+*{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:#f5f8fb;color:var(--text)}
+header{background:linear-gradient(110deg,#073765,#0b5b9b);color:#fff;padding:22px 28px}
+header h1{margin:0;font-size:26px} header p{margin:6px 0 0;opacity:.9}
+.wrap{max-width:1500px;margin:auto;padding:18px}.grid{display:grid;grid-template-columns:360px 1fr;gap:16px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 4px 16px #163a5b12;padding:16px}
+h2{font-size:16px;margin:0 0 12px;color:var(--navy)} label{display:block;font-size:12px;font-weight:700;margin:10px 0 5px}
+input,select,button{width:100%;border:1px solid #bfcfdd;border-radius:9px;padding:10px;font-size:13px}
+input[type=file]{padding:8px;background:#fff}button{cursor:pointer;border:none;background:var(--blue);color:#fff;font-weight:700;margin-top:10px}
+button.secondary{background:#e8f1f8;color:var(--navy)}button.orange{background:var(--orange)}button:disabled{opacity:.5;cursor:not-allowed}
+.small{font-size:11px;color:#61778b;line-height:1.45}.status{padding:10px;border-radius:8px;background:#eef5fb;margin-top:10px;font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+.kpi b{display:block;font-size:22px;color:var(--navy)}.kpi span{font-size:11px;color:#667d91}
+#map{height:470px;border-radius:12px;background:#e9eef3}
+.tablewrap{overflow:auto;max-height:460px;border:1px solid var(--line);border-radius:10px;margin-top:12px}
+table{width:100%;border-collapse:collapse;font-size:12px}th{position:sticky;top:0;background:var(--navy);color:#fff;padding:9px;text-align:left}
+td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{background:#f0f7fd}.routeLink{color:var(--blue);font-weight:800;cursor:pointer;text-decoration:underline}
+.badge{padding:3px 7px;border-radius:20px;background:#e8f1f8;color:var(--navy);font-size:10px}.ok{color:var(--green)}.warn{color:var(--orange)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.sep{height:1px;background:#e1eaf2;margin:14px 0}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mesa de Contratação | Roteirização e Custo</h1>
+  <p>Upload da planilha → roteirização → KM real Google → custo estimado → mapa clicável</p>
+</header>
+<div class="wrap">
+<div class="grid">
+<aside class="card">
+  <h2>1. Configuração</h2>
+  <label>Chave Google Maps</label>
+  <input id="apiKey" type="password" placeholder="Cole sua API Key aqui"/>
+  <div class="small">A chave fica somente no navegador. Para produção, restrinja a chave por domínio no Google Cloud.</div>
+
+  <label>Origem</label>
+  <input id="origin" value="Estrada Velha Guarulhos São Miguel, 1971, Guarulhos - SP"/>
+
+  <label>Planilha de rotas (.xlsx)</label>
+  <input id="routeFile" type="file" accept=".xlsx,.xls"/>
+
+  <div class="sep"></div>
+  <h2>2. Custo Fiorino</h2>
+  <label>Base histórica de fretes por veículo (.xlsx) — opcional</label>
+  <input id="historyFile" type="file" accept=".xlsx,.xls"/>
+  <div class="small">Se enviada, o sistema procura registros do veículo selecionado e calcula referência por faixa de KM. Espera colunas equivalentes a VEÍCULO, UF, KM e FRETE PAGO/VALOR.</div>
+
+  <div class="row2">
+    <div>
+      <label>Tipo de veículo</label>
+      <select id="vehicleType">
+        <option value="FIORINO">Fiorino</option>
+        <option value="VAN">Van</option>
+        <option value="VUC">VUC</option>
+        <option value="3/4">3/4</option>
+        <option value="TOCO">Toco</option>
+        <option value="TRUCK">Truck</option>
+        <option value="CARRETA">Carreta</option>
+      </select>
+    </div>
+    <div>
+      <label>Quantidade de entregas</label>
+      <input id="deliveryQty" type="number" min="1" step="1" value="1"/>
+    </div>
+  </div>
+
+  <label>R$/km padrão (fallback)</label>
+  <input id="fallbackRate" type="number" step="0.01" value="2.10"/>
+
+  <div class="row2">
+    <div><label>Pedágio estimado</label><input id="toll" type="number" step="0.01" value="0"/></div>
+    <div><label>Margem (%)</label><input id="margin" type="number" step="0.1" value="0"/></div>
+  </div>
+
+  <label><input id="roundTrip" type="checkbox" style="width:auto;margin-right:7px"/> Considerar retorno à Mundial no KM</label>
+  <label><input id="optimize" type="checkbox" checked style="width:auto;margin-right:7px"/> Otimizar sequência das paradas</label>
+
+  <button id="loadBtn">Carregar planilha</button>
+  <button id="calcBtn" class="orange" disabled>Roteirizar todas as rotas</button>
+  <button id="exportBtn" class="secondary" disabled>Exportar resultado para Excel</button>
+  <div id="status" class="status">Aguardando planilha.</div>
+</aside>
+
+<main>
+  <div class="kpis">
+    <div class="kpi"><b id="kRoutes">0</b><span>Rotas</span></div>
+    <div class="kpi"><b id="kKm">0 km</b><span>KM total estimado</span></div>
+    <div class="kpi"><b id="kCost">R$ 0</b><span>Custo projetado</span></div>
+    <div class="kpi"><b id="kRate">R$ 0,00</b><span>R$/km médio</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Mapa da rota selecionada</h2>
+    <div id="map"></div>
+    <div id="routeSummary" class="small" style="margin-top:8px">Clique em uma rota após o processamento.</div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h2>Rotas processadas</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM</th><th>R$/km ref.</th><th>Custo</th><th>Custo/entrega</th><th>Base custo</th><th>Status</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+</div>
+</div>
+
+<script>
+let googleReady=false, map, directionsService, directionsRenderer;
+let routeRows=[], results=[], historyRates=[];
+const $=id=>document.getElementById(id);
+const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(n||0);
+const num=n=>new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(n||0);
+const norm=s=>(s??'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
+const nval=v=>{ if(typeof v==='number')return v; if(v==null)return NaN; let s=String(v).replace(/[R$\s]/g,''); if(s.includes(',')&&s.includes('.'))s=s.replace(/\./g,'').replace(',','.'); else s=s.replace(',','.'); return parseFloat(s); };
+function setStatus(t){$('status').textContent=t}
+function loadGoogle(){
+  return new Promise((resolve,reject)=>{
+    if(window.google?.maps){googleReady=true;initMap();return resolve();}
+    const key=$('apiKey').value.trim(); if(!key)return reject(new Error('Informe a chave do Google Maps.'));
+    window.__gmcb=()=>{googleReady=true;initMap();resolve();}
+    const s=document.createElement('script');
+    s.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&callback=__gmcb&libraries=geometry`;
+    s.async=true;s.onerror=()=>reject(new Error('Não foi possível carregar o Google Maps.'));document.head.appendChild(s);
+  });
+}
+function initMap(){
+  map=new google.maps.Map($('map'),{center:{lat:-23.4543,lng:-46.5337},zoom:9,mapTypeControl:false});
+  directionsService=new google.maps.DirectionsService();
+  directionsRenderer=new google.maps.DirectionsRenderer({map,preserveViewport:false});
+}
+async function readExcel(file){
+  const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:'array'}); const ws=wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws,{defval:null});
+}
+function pick(row, names){
+  const keys=Object.keys(row); for(const wanted of names){const k=keys.find(x=>norm(x)===norm(wanted)||norm(x).includes(norm(wanted))); if(k)return row[k];} return null;
+}
+function parseCities(v,uf){
+  return String(v||'').split(/[,;|]/).map(x=>x.trim()).filter(Boolean).map(c=>`${c}, ${uf||'SP'}, Brasil`);
+}
+function kmBand(km){ if(km<=100)return '0-100'; if(km<=250)return '101-250'; if(km<=500)return '251-500'; if(km<=750)return '501-750'; if(km<=1000)return '751-1000'; if(km<=1500)return '1001-1500'; if(km<=2000)return '1501-2000'; return '2000+'; }
+async function buildHistory(){
+  historyRates=[]; const f=$('historyFile').files[0]; if(!f)return;
+  const rows=await readExcel(f), buckets={};
+  for(const r of rows){
+    const veh=norm(pick(r,['VEICULO','VEÍCULO','TIPO VEICULO'])); const uf=norm(pick(r,['UF','ESTADO']));
+    const km=nval(pick(r,['KM','QUILOMETRAGEM','DISTANCIA','DISTÂNCIA']));
+    const paid=nval(pick(r,['FRETE PAGO CONSIDERADO','FRETE PAGO','VALOR PAGO','VALORES','VALOR']));
+    if(!Number.isFinite(km)||km<=0||!Number.isFinite(paid)||paid<=0)continue;
+    const vehicle=veh || 'SEM VEICULO';
+    const key=`${vehicle}|${uf||'TODOS'}|${kmBand(km)}`; (buckets[key]??=[]).push(paid/km);
+  }
+  for(const [key,a] of Object.entries(buckets)){a.sort((x,y)=>x-y); const med=a[Math.floor(a.length/2)]; historyRates.push({key,rate:med,n:a.length});}
+}
+function rateFor(km,uf,vehicle){
+  const band=kmBand(km), v=norm(vehicle);
+  let h=historyRates.find(x=>x.key===`${v}|${norm(uf)}|${band}`);
+  if(!h) h=historyRates.find(x=>x.key.startsWith(`${v}|`) && x.key.endsWith(`|${band}`));
+  if(h)return {rate:h.rate,base:`Histórico ${vehicle} ${band} km (n=${h.n})`};
+  return {rate:nval($('fallbackRate').value)||0,base:`R$/km padrão (${vehicle})`};
+}
+function directions(req){return new Promise((resolve,reject)=>directionsService.route(req,(r,s)=>s==='OK'?resolve(r):reject(new Error(s))))}
+async function calcRoute(row,idx){
+  const origin=$('origin').value.trim(), stops=parseCities(row.cities,row.uf); if(!stops.length)throw new Error('Sem cidades');
+  const returnToOrigin=$('roundTrip').checked;
+  let destination, waypoints=[];
+  if(returnToOrigin){destination=origin; waypoints=stops.map(x=>({location:x,stopover:true}));}
+  else{destination=stops[stops.length-1]; waypoints=stops.slice(0,-1).map(x=>({location:x,stopover:true}));}
+  const res=await directions({
+    origin,destination,waypoints,optimizeWaypoints:$('optimize').checked,
+    travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
+  });
+  const rt=res.routes[0]; let meters=0, seconds=0; rt.legs.forEach(l=>{meters+=l.distance.value;seconds+=l.duration.value});
+  let orderedStops;
+  if(returnToOrigin){
+    const order=rt.waypoint_order||waypoints.map((_,i)=>i); orderedStops=order.map(i=>stops[i]);
+  } else {
+    const mids=stops.slice(0,-1); const order=rt.waypoint_order||waypoints.map((_,i)=>i); orderedStops=order.map(i=>mids[i]).concat(stops[stops.length-1]);
+  }
+  const km=meters/1000;
+  const vehicle=row.vehicle || $('vehicleType').value;
+  const deliveries=Math.max(1, Number(row.deliveries || $('deliveryQty').value || stops.length || 1));
+  const rr=rateFor(km,row.uf,vehicle), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
+  const cost=(km*rr.rate+toll)*(1+margin);
+  return {...row,vehicle,deliveries,idx,km,seconds,rate:rr.rate,cost,costPerDelivery:cost/deliveries,costBase:rr.base,sequence:orderedStops.map(x=>x.replace(', Brasil','')).join(' → '),directions:res,status:'OK'};
+}
+function render(){
+  $('tbody').innerHTML=results.map((r,i)=>`<tr>
+    <td><span class="routeLink" onclick="showRoute(${i})">${r.route}</span></td><td>${r.day??''}</td><td>${r.uf??''}</td>
+    <td><select onchange="changeVehicle(${i},this.value)" style="min-width:90px;padding:5px">
+      ${['FIORINO','VAN','VUC','3/4','TOCO','TRUCK','CARRETA'].map(v=>`<option ${v===r.vehicle?'selected':''}>${v}</option>`).join('')}
+    </select></td>
+    <td><input type="number" min="1" value="${r.deliveries||1}" onchange="changeDeliveries(${i},this.value)" style="width:70px;padding:5px"></td>
+    <td>${r.stores??''}</td><td>${r.sequence||''}</td><td>${num(r.km)}</td><td>${money(r.rate)}</td><td><b>${money(r.cost)}</b></td>
+    <td>${money(r.costPerDelivery)}</td><td>${r.costBase||''}</td>
+    <td class="${r.status==='OK'?'ok':'warn'}">${r.status}</td></tr>`).join('');
+  const ok=results.filter(x=>x.status==='OK'), km=ok.reduce((a,b)=>a+b.km,0), cost=ok.reduce((a,b)=>a+b.cost,0);
+  $('kRoutes').textContent=results.length;$('kKm').textContent=num(km)+' km';$('kCost').textContent=money(cost);$('kRate').textContent=money(km?cost/km:0);
+}
+window.changeVehicle=(i,v)=>{
+  const r=results[i]; if(!r)return;
+  r.vehicle=v;
+  const rr=rateFor(r.km,r.uf,v), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
+  r.rate=rr.rate; r.costBase=rr.base; r.cost=(r.km*r.rate+toll)*(1+margin); r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
+  render();
+};
+window.changeDeliveries=(i,q)=>{
+  const r=results[i]; if(!r)return;
+  r.deliveries=Math.max(1,Number(q)||1); r.costPerDelivery=r.cost/r.deliveries; render();
+};
+window.showRoute=i=>{
+  const r=results[i]; if(!r?.directions)return; directionsRenderer.setDirections(r.directions);
+  $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} entregas | ${num(r.km)} km | ${money(r.rate)}/km | <b>${money(r.cost)}</b> | ${money(r.costPerDelivery)}/entrega | ${r.costBase}`;
+};
+$('loadBtn').onclick=async()=>{
+  try{
+    const f=$('routeFile').files[0]; if(!f)throw new Error('Selecione a planilha de rotas.');
+    setStatus('Lendo planilha...');
+    const rows=await readExcel(f);
+    routeRows=rows.map((r,i)=>({
+      route:pick(r,['ROTA'])||`ROTA-${i+1}`,day:pick(r,['DIA']),uf:pick(r,['UF'])||'SP',supplier:pick(r,['FORNECEDOR']),
+      stores:pick(r,['LOJAS']),vehicle:norm(pick(r,['VEICULO','VEÍCULO','TIPO VEICULO']))||$('vehicleType').value,
+      deliveries:nval(pick(r,['QTD ENTREGA','QTD ENTREGAS','QUANTIDADE ENTREGA','ENTREGAS']))||nval($('deliveryQty').value)||1,
+      cities:pick(r,['CIDADES/REGIÃO','CIDADES/REGIAO','CIDADES','REGIAO'])
+    })).filter(r=>r.cities);
+    await buildHistory();
+    $('calcBtn').disabled=!routeRows.length; setStatus(`${routeRows.length} rotas carregadas. ${historyRates.length?'Base histórica de veículos reconhecida.':'Usando R$/km padrão até carregar histórico.'}`);
+  }catch(e){setStatus('Erro: '+e.message)}
+};
+$('calcBtn').onclick=async()=>{
+  try{
+    $('calcBtn').disabled=true; results=[]; await loadGoogle();
+    for(let i=0;i<routeRows.length;i++){
+      setStatus(`Roteirizando ${i+1}/${routeRows.length}: ${routeRows[i].route}...`);
+      try{results.push(await calcRoute(routeRows[i],i));}
+      catch(e){results.push({...routeRows[i],idx:i,status:'ERRO: '+e.message,km:0,rate:0,cost:0,sequence:''});}
+      render();
+      await new Promise(r=>setTimeout(r,180));
+    }
+    $('exportBtn').disabled=false;setStatus(`Concluído: ${results.filter(x=>x.status==='OK').length}/${results.length} rotas processadas.`);
+    if(results.find(x=>x.status==='OK'))showRoute(results.findIndex(x=>x.status==='OK'));
+  }catch(e){setStatus('Erro: '+e.message)} finally{$('calcBtn').disabled=false}
+};
+$('exportBtn').onclick=()=>{
+  const data=results.map(r=>({
+    ROTA:r.route,DIA:r.day,UF:r.uf,VEICULO:r.vehicle,'QTD ENTREGA':r.deliveries,FORNECEDOR:r.supplier,LOJAS:r.stores,'CIDADES/REGIÃO':r.cities,
+    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'R$/KM REFERÊNCIA':r.rate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'BASE DO CUSTO':r.costBase,STATUS:r.status
+  }));
+  const ws=XLSX.utils.json_to_sheet(data), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rotas Roteirizadas');
+  XLSX.writeFile(wb,'Rotas_Roteirizadas_Mesa.xlsx');
+};
+</script>
+</body>
+</html>
