@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Mesa | Roteirização e Custo V4</title>
+<title>Mesa | Roteirização e Custo V5</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{--navy:#083b6f;--blue:#0b5fa5;--light:#eef5fb;--orange:#f47c20;--green:#138a4b;--red:#c0392b;--text:#17324d;--line:#d7e4ef}
@@ -36,7 +36,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <body>
 <header>
   <h1>Mesa de Contratação | Roteirização e Custo</h1>
-  <p>Upload da planilha → roteirização → KM real Google → custo estimado → mapa clicável</p>
+  <p>V5: KM real Google → menor percurso → histórico robusto de preços → mapa clicável</p>
 </header>
 <div class="wrap">
 <div class="grid">
@@ -55,7 +55,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
   <h2>2. Custo Fiorino</h2>
   <label>Base histórica de fretes por veículo (.xlsx) — opcional</label>
   <input id="historyFile" type="file" accept=".xlsx,.xls"/>
-  <div class="small">Se enviada, o sistema procura o mesmo veículo e UF e prioriza fretes com KM até ±20% da rota (amplia para ±35% se necessário). O preço usa a mediana do R$/km histórico para reduzir distorções. A quantidade de entregas não multiplica o frete.</div>
+  <div class="small">Se enviada, o sistema procura o mesmo veículo + UF e KM semelhante. Exige amostra mais robusta, amplia a janela quando necessário e limita outliers antes de calcular a mediana. Assim, um único frete caro não vira referência. A quantidade de entregas não multiplica o frete.</div>
 
   <div class="row2">
     <div>
@@ -104,14 +104,14 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     <h2>Mapa da rota selecionada</h2>
     <div id="map"></div>
     <div id="routeSummary" class="small" style="margin-top:8px">Clique em uma rota após o processamento.</div>
-    <div class="small" style="margin-top:6px"><b>Regra:</b> sem retorno à base, o destino final é a parada geograficamente mais distante da Mundial; as paradas intermediárias são otimizadas pelo Google para reduzir retorno e zig-zag.</div>
+    <div class="small" style="margin-top:6px"><b>Regra V5:</b> sem retorno à base, o sistema testa as paradas como destino final usando somente o serviço de rotas e escolhe o menor percurso. Não depende da Geocoding API.</div>
   </div>
 
   <div class="card" style="margin-top:12px">
     <h2>Rotas processadas</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM</th><th>R$/km ref.</th><th>Custo</th><th>Custo/entrega</th><th>Base custo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM</th><th>R$/km ref.</th><th>Custo</th><th>Custo/entrega</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -220,46 +220,67 @@ function median(a){
   const s=[...a].sort((x,y)=>x-y), m=Math.floor(s.length/2);
   return s.length%2?s[m]:(s[m-1]+s[m])/2;
 }
+function percentile(arr,p){
+  if(!arr.length)return NaN;
+  const s=[...arr].sort((a,b)=>a-b), idx=(s.length-1)*p, lo=Math.floor(idx), hi=Math.ceil(idx);
+  return lo===hi?s[lo]:s[lo]+(s[hi]-s[lo])*(idx-lo);
+}
 function rateFor(km,uf,vehicle){
   const v=norm(vehicle), u=norm(uf);
   let pool=historyObs.filter(x=>x.vehicle===v && (x.uf===u || !u));
-  if(!pool.length) pool=historyObs.filter(x=>x.vehicle===v);
+  let scope='veículo + UF';
+  if(pool.length<8){ pool=historyObs.filter(x=>x.vehicle===v); scope='veículo (todas UFs)'; }
+
   if(pool.length){
-    // Prioriza fretes historicamente pagos com distância realmente semelhante.
     const ranked=pool.map(x=>({...x,diff:Math.abs(x.km-km)/Math.max(km,1)})).sort((a,b)=>a.diff-b.diff);
-    let sample=ranked.filter(x=>x.diff<=0.20).slice(0,25);
-    if(sample.length<5) sample=ranked.filter(x=>x.diff<=0.35).slice(0,25);
-    if(sample.length<5) sample=ranked.slice(0,Math.min(15,ranked.length));
-    // Mediana de R$/km reduz impacto de urgências e outliers.
-    const rate=median(sample.map(x=>x.rate));
-    if(Number.isFinite(rate)) {
+    let sample=ranked.filter(x=>x.diff<=0.20).slice(0,30);
+    let window='±20%';
+    if(sample.length<8){ sample=ranked.filter(x=>x.diff<=0.35).slice(0,30); window='±35%'; }
+    if(sample.length<8){ sample=ranked.slice(0,Math.min(20,ranked.length)); window='20 fretes mais próximos'; }
+
+    // Proteção contra outliers: winsoriza R$/km nos percentis 10–90 quando há amostra suficiente.
+    let rates=sample.map(x=>x.rate).filter(Number.isFinite);
+    if(rates.length>=8){
+      const p10=percentile(rates,.10), p90=percentile(rates,.90);
+      rates=rates.map(x=>Math.min(p90,Math.max(p10,x)));
+    }
+    const rate=median(rates);
+    if(Number.isFinite(rate)){
       const avgKm=sample.reduce((a,b)=>a+b.km,0)/sample.length;
-      return {rate,base:`Histórico ${vehicle}: ${sample.length} fretes próximos (KM médio ${avgKm.toFixed(0)})`,n:sample.length};
+      const confidence=sample.length>=12?'ALTA':sample.length>=8?'MÉDIA':'BAIXA';
+      return {
+        rate,n:sample.length,confidence,
+        base:`${scope} | ${window} | n=${sample.length} | mediana robusta | confiança ${confidence} | KM médio ${avgKm.toFixed(0)}`
+      };
     }
   }
-  return {rate:nval($('fallbackRate').value)||0,base:`R$/km padrão (${vehicle})`,n:0};
+  return {rate:nval($('fallbackRate').value)||0,n:0,confidence:'FALLBACK',base:`R$/km padrão (${vehicle}) | sem amostra histórica suficiente`};
 }
-function geocodeAddress(address){
-  return new Promise((resolve,reject)=>{
-    const g=new google.maps.Geocoder();
-    g.geocode({address},(res,status)=>status==='OK'&&res[0]?resolve(res[0].geometry.location):reject(new Error('Geocodificação: '+status)));
-  });
-}
-async function chooseStraightDestination(origin,stops){
-  if(stops.length<=1)return {destination:stops[0],waypoints:[]};
-  const originLoc=await geocodeAddress(origin);
-  const located=[];
-  for(const s of stops){
+async function chooseLinearRoute(origin,stops){
+  // V5 não usa Geocoding API. Testa cada parada como possível destino final
+  // usando apenas Directions/Routes e escolhe o menor percurso total.
+  if(stops.length<=1)return {destination:stops[0],waypoints:[],preview:null};
+  let best=null;
+  for(let d=0; d<stops.length; d++){
+    const destination=stops[d];
+    const mids=stops.filter((_,i)=>i!==d);
     try{
-      const loc=await geocodeAddress(s);
-      const d=google.maps.geometry.spherical.computeDistanceBetween(originLoc,loc);
-      located.push({s,d});
-    }catch(e){ located.push({s,d:0}); }
+      const res=await directions({
+        origin,destination,
+        waypoints:mids.map(x=>({location:x,stopover:true})),
+        optimizeWaypoints:true,
+        travelMode:google.maps.TravelMode.DRIVING,
+        avoidFerries:true
+      });
+      const rt=res.routes[0];
+      const meters=rt.legs.reduce((a,l)=>a+(l.distance?.value||0),0);
+      if(!best || meters<best.meters) best={destination,waypoints:mids.map(x=>({location:x,stopover:true})),preview:res,meters};
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,90));
   }
-  located.sort((a,b)=>b.d-a.d);
-  const destination=located[0].s;
-  const waypoints=stops.filter(s=>s!==destination).map(x=>({location:x,stopover:true}));
-  return {destination,waypoints};
+  if(best)return best;
+  // fallback sem chamada extra de geocodificação
+  return {destination:stops[stops.length-1],waypoints:stops.slice(0,-1).map(x=>({location:x,stopover:true})),preview:null};
 }
 function directions(req){return new Promise((resolve,reject)=>directionsService.route(req,(r,s)=>s==='OK'?resolve(r):reject(new Error(s))))}
 async function calcRoute(row,idx){
@@ -271,10 +292,11 @@ async function calcRoute(row,idx){
   } else {
     // "Linha reta": escolhe como destino final a parada geograficamente mais distante da Mundial.
     // As demais são otimizadas pelo Google no caminho, evitando voltar para trás.
-    const straight=await chooseStraightDestination(origin,stops);
+    const straight=await chooseLinearRoute(origin,stops);
     destination=straight.destination; waypoints=straight.waypoints;
+    var previewRoute=straight.preview;
   }
-  const res=await directions({
+  const res=previewRoute || await directions({
     origin,destination,waypoints,optimizeWaypoints:$('optimize').checked,
     travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
   });
@@ -293,7 +315,7 @@ async function calcRoute(row,idx){
   const deliveries=Math.max(1, Number(row.deliveries || $('deliveryQty').value || stops.length || 1));
   const rr=rateFor(km,row.uf,vehicle), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
   const cost=(km*rr.rate+toll)*(1+margin);
-  return {...row,vehicle,deliveries,idx,km,seconds,rate:rr.rate,cost,costPerDelivery:cost/deliveries,costBase:rr.base,sequence:orderedStops.map(x=>x.replace(', Brasil','')).join(' → '),directions:res,status:'OK'};
+  return {...row,vehicle,deliveries,idx,km,seconds,rate:rr.rate,cost,costPerDelivery:cost/deliveries,costBase:rr.base,sampleN:rr.n||0,confidence:rr.confidence||'',sequence:orderedStops.map(x=>x.replace(', Brasil','')).join(' → '),directions:res,status:'OK'};
 }
 function render(){
   $('tbody').innerHTML=results.map((r,i)=>`<tr>
@@ -303,7 +325,7 @@ function render(){
     </select></td>
     <td><input type="number" min="1" value="${r.deliveries||1}" onchange="changeDeliveries(${i},this.value)" style="width:70px;padding:5px"></td>
     <td>${r.stores??''}</td><td>${r.sequence||''}</td><td>${num(r.km)}</td><td>${money(r.rate)}</td><td><b>${money(r.cost)}</b></td>
-    <td>${money(r.costPerDelivery)}</td><td>${r.costBase||''}</td>
+    <td>${money(r.costPerDelivery)}</td><td><span class="badge">${r.confidence||''}</span></td><td>${r.costBase||''}</td>
     <td class="${r.status==='OK'?'ok':'warn'}">${r.status}</td></tr>`).join('');
   const ok=results.filter(x=>x.status==='OK'), km=ok.reduce((a,b)=>a+b.km,0), cost=ok.reduce((a,b)=>a+b.cost,0);
   $('kRoutes').textContent=results.length;$('kKm').textContent=num(km)+' km';$('kCost').textContent=money(cost);$('kRate').textContent=money(km?cost/km:0);
@@ -312,7 +334,7 @@ window.changeVehicle=(i,v)=>{
   const r=results[i]; if(!r)return;
   r.vehicle=v;
   const rr=rateFor(r.km,r.uf,v), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
-  r.rate=rr.rate; r.costBase=rr.base; r.cost=(r.km*r.rate+toll)*(1+margin); r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
+  r.rate=rr.rate; r.costBase=rr.base; r.sampleN=rr.n||0; r.confidence=rr.confidence||''; r.cost=(r.km*r.rate+toll)*(1+margin); r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
   render();
 };
 window.changeDeliveries=(i,q)=>{
@@ -374,7 +396,7 @@ $('calcBtn').onclick=async()=>{
 $('exportBtn').onclick=()=>{
   const data=results.map(r=>({
     ROTA:r.route,DIA:r.day,UF:r.uf,VEICULO:r.vehicle,'QTD ENTREGA':r.deliveries,FORNECEDOR:r.supplier,LOJAS:r.stores,'CIDADES/REGIÃO':r.cities,
-    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'R$/KM REFERÊNCIA':r.rate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'BASE DO CUSTO':r.costBase,STATUS:r.status
+    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'R$/KM REFERÊNCIA':r.rate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
   }));
   const ws=XLSX.utils.json_to_sheet(data), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rotas Roteirizadas');
   XLSX.writeFile(wb,'Rotas_Roteirizadas_Mesa.xlsx');
