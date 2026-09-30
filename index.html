@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Mesa | Roteirização e Custo por Veículo</title>
+<title>Mesa | Roteirização e Custo V4</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{--navy:#083b6f;--blue:#0b5fa5;--light:#eef5fb;--orange:#f47c20;--green:#138a4b;--red:#c0392b;--text:#17324d;--line:#d7e4ef}
@@ -25,6 +25,11 @@ table{width:100%;border-collapse:collapse;font-size:12px}th{position:sticky;top:
 td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{background:#f0f7fd}.routeLink{color:var(--blue);font-weight:800;cursor:pointer;text-decoration:underline}
 .badge{padding:3px 7px;border-radius:20px;background:#e8f1f8;color:var(--navy);font-size:10px}.ok{color:var(--green)}.warn{color:var(--orange)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.sep{height:1px;background:#e1eaf2;margin:14px 0}
+.configbar{display:flex;justify-content:flex-end;margin-bottom:10px}
+.configbar button{width:auto;margin:0;padding:9px 15px}
+.modal{display:none;position:fixed;inset:0;background:#001a2f99;z-index:9999;align-items:center;justify-content:center;padding:18px}
+.modal.open{display:flex}.modalbox{width:min(520px,100%);background:#fff;border-radius:16px;padding:20px;box-shadow:0 20px 60px #0005}
+.modalbox h2{font-size:20px}.lockmsg{font-size:12px;color:#61778b;margin-top:8px}
 @media(max-width:900px){.grid{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}}
 </style>
 </head>
@@ -36,10 +41,9 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <div class="wrap">
 <div class="grid">
 <aside class="card">
-  <h2>1. Configuração</h2>
-  <label>Chave Google Maps</label>
-  <input id="apiKey" type="password" placeholder="Cole sua API Key aqui"/>
-  <div class="small">A chave fica somente no navegador. Para produção, restrinja a chave por domínio no Google Cloud.</div>
+  <h2>1. Operação</h2>
+  <div class="configbar"><button class="secondary" id="openConfigBtn">⚙ Configurações do administrador</button></div>
+  <div class="small">A credencial do Google Maps e os parâmetros de custo ficam na área protegida do administrador.</div>
 
   <label>Origem</label>
   <input id="origin" value="Estrada Velha Guarulhos São Miguel, 1971, Guarulhos - SP"/>
@@ -51,7 +55,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
   <h2>2. Custo Fiorino</h2>
   <label>Base histórica de fretes por veículo (.xlsx) — opcional</label>
   <input id="historyFile" type="file" accept=".xlsx,.xls"/>
-  <div class="small">Se enviada, o sistema procura registros do veículo selecionado e calcula referência por faixa de KM. Espera colunas equivalentes a VEÍCULO, UF, KM e FRETE PAGO/VALOR.</div>
+  <div class="small">Se enviada, o sistema procura o mesmo veículo e UF e prioriza fretes com KM até ±20% da rota (amplia para ±35% se necessário). O preço usa a mediana do R$/km histórico para reduzir distorções. A quantidade de entregas não multiplica o frete.</div>
 
   <div class="row2">
     <div>
@@ -72,8 +76,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     </div>
   </div>
 
-  <label>R$/km padrão (fallback)</label>
-  <input id="fallbackRate" type="number" step="0.01" value="2.10"/>
+  <input id="fallbackRate" type="hidden" value="2.10"/>
 
   <div class="row2">
     <div><label>Pedágio estimado</label><input id="toll" type="number" step="0.01" value="0"/></div>
@@ -101,6 +104,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     <h2>Mapa da rota selecionada</h2>
     <div id="map"></div>
     <div id="routeSummary" class="small" style="margin-top:8px">Clique em uma rota após o processamento.</div>
+    <div class="small" style="margin-top:6px"><b>Regra:</b> sem retorno à base, o destino final é a parada geograficamente mais distante da Mundial; as paradas intermediárias são otimizadas pelo Google para reduzir retorno e zig-zag.</div>
   </div>
 
   <div class="card" style="margin-top:12px">
@@ -116,13 +120,60 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 </div>
 </div>
 
+
+<div id="configModal" class="modal">
+  <div class="modalbox">
+    <div id="loginPanel">
+      <h2>Configurações do administrador</h2>
+      <label>Senha de acesso</label>
+      <input id="adminPassword" type="password" placeholder="Digite sua senha"/>
+      <button id="unlockBtn">Acessar configurações</button>
+      <button class="secondary" id="closeConfigBtn">Cancelar</button>
+      <div class="lockmsg">Primeiro acesso: use a senha <b>Mundial@2026</b> e altere-a imediatamente.</div>
+    </div>
+    <div id="settingsPanel" style="display:none">
+      <h2>Parâmetros protegidos</h2>
+      <label>Chave Google Maps</label>
+      <input id="apiKey" type="password" placeholder="Cole sua API Key"/>
+      <label>R$/km padrão</label>
+      <input id="adminFallbackRate" type="number" step="0.01" value="2.10"/>
+      <label>Nova senha do administrador</label>
+      <input id="newAdminPassword" type="password" placeholder="Deixe vazio para manter"/>
+      <button id="saveConfigBtn">Salvar configurações</button>
+      <button class="secondary" id="lockConfigBtn">Fechar e bloquear</button>
+      <div class="lockmsg">As configurações são armazenadas localmente neste navegador. Para segurança real em produção, use autenticação e backend.</div>
+    </div>
+  </div>
+</div>
+
 <script>
 let googleReady=false, map, directionsService, directionsRenderer;
-let routeRows=[], results=[], historyRates=[];
+let routeRows=[], results=[], historyRates=[], historyObs=[];
 const $=id=>document.getElementById(id);
 const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(n||0);
 const num=n=>new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(n||0);
 const norm=s=>(s??'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
+
+const CONFIG_KEY='mundial_route_config_v3';
+const PASS_KEY='mundial_route_admin_hash_v3';
+async function hashText(s){
+  const data=new TextEncoder().encode(s);
+  const digest=await crypto.subtle.digest('SHA-256',data);
+  return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function ensureDefaultPass(){
+  if(!localStorage.getItem(PASS_KEY)) localStorage.setItem(PASS_KEY,await hashText('Mundial@2026'));
+}
+function loadSavedConfig(){
+  try{
+    const c=JSON.parse(localStorage.getItem(CONFIG_KEY)||'{}');
+    if(c.apiKey) $('apiKey').value=c.apiKey;
+    if(c.fallbackRate){$('fallbackRate').value=c.fallbackRate;$('adminFallbackRate').value=c.fallbackRate;}
+  }catch(e){}
+}
+function openAdmin(){ $('configModal').classList.add('open'); $('loginPanel').style.display='block'; $('settingsPanel').style.display='none'; $('adminPassword').value=''; }
+function closeAdmin(){ $('configModal').classList.remove('open'); $('apiKey').type='password'; }
+
 const nval=v=>{ if(typeof v==='number')return v; if(v==null)return NaN; let s=String(v).replace(/[R$\s]/g,''); if(s.includes(',')&&s.includes('.'))s=s.replace(/\./g,'').replace(',','.'); else s=s.replace(',','.'); return parseFloat(s); };
 function setStatus(t){$('status').textContent=t}
 function loadGoogle(){
@@ -152,32 +203,77 @@ function parseCities(v,uf){
 }
 function kmBand(km){ if(km<=100)return '0-100'; if(km<=250)return '101-250'; if(km<=500)return '251-500'; if(km<=750)return '501-750'; if(km<=1000)return '751-1000'; if(km<=1500)return '1001-1500'; if(km<=2000)return '1501-2000'; return '2000+'; }
 async function buildHistory(){
-  historyRates=[]; const f=$('historyFile').files[0]; if(!f)return;
-  const rows=await readExcel(f), buckets={};
+  historyRates=[]; historyObs=[];
+  const f=$('historyFile').files[0]; if(!f)return;
+  const rows=await readExcel(f);
   for(const r of rows){
-    const veh=norm(pick(r,['VEICULO','VEÍCULO','TIPO VEICULO'])); const uf=norm(pick(r,['UF','ESTADO']));
+    const vehicle=norm(pick(r,['VEICULO','VEÍCULO','TIPO VEICULO']));
+    const uf=norm(pick(r,['UF','ESTADO']));
     const km=nval(pick(r,['KM','QUILOMETRAGEM','DISTANCIA','DISTÂNCIA']));
     const paid=nval(pick(r,['FRETE PAGO CONSIDERADO','FRETE PAGO','VALOR PAGO','VALORES','VALOR']));
-    if(!Number.isFinite(km)||km<=0||!Number.isFinite(paid)||paid<=0)continue;
-    const vehicle=veh || 'SEM VEICULO';
-    const key=`${vehicle}|${uf||'TODOS'}|${kmBand(km)}`; (buckets[key]??=[]).push(paid/km);
+    if(!vehicle || !Number.isFinite(km) || km<=0 || !Number.isFinite(paid) || paid<=0) continue;
+    historyObs.push({vehicle,uf:uf||'TODOS',km,paid,rate:paid/km});
   }
-  for(const [key,a] of Object.entries(buckets)){a.sort((x,y)=>x-y); const med=a[Math.floor(a.length/2)]; historyRates.push({key,rate:med,n:a.length});}
+}
+function median(a){
+  if(!a.length)return NaN;
+  const s=[...a].sort((x,y)=>x-y), m=Math.floor(s.length/2);
+  return s.length%2?s[m]:(s[m-1]+s[m])/2;
 }
 function rateFor(km,uf,vehicle){
-  const band=kmBand(km), v=norm(vehicle);
-  let h=historyRates.find(x=>x.key===`${v}|${norm(uf)}|${band}`);
-  if(!h) h=historyRates.find(x=>x.key.startsWith(`${v}|`) && x.key.endsWith(`|${band}`));
-  if(h)return {rate:h.rate,base:`Histórico ${vehicle} ${band} km (n=${h.n})`};
-  return {rate:nval($('fallbackRate').value)||0,base:`R$/km padrão (${vehicle})`};
+  const v=norm(vehicle), u=norm(uf);
+  let pool=historyObs.filter(x=>x.vehicle===v && (x.uf===u || !u));
+  if(!pool.length) pool=historyObs.filter(x=>x.vehicle===v);
+  if(pool.length){
+    // Prioriza fretes historicamente pagos com distância realmente semelhante.
+    const ranked=pool.map(x=>({...x,diff:Math.abs(x.km-km)/Math.max(km,1)})).sort((a,b)=>a.diff-b.diff);
+    let sample=ranked.filter(x=>x.diff<=0.20).slice(0,25);
+    if(sample.length<5) sample=ranked.filter(x=>x.diff<=0.35).slice(0,25);
+    if(sample.length<5) sample=ranked.slice(0,Math.min(15,ranked.length));
+    // Mediana de R$/km reduz impacto de urgências e outliers.
+    const rate=median(sample.map(x=>x.rate));
+    if(Number.isFinite(rate)) {
+      const avgKm=sample.reduce((a,b)=>a+b.km,0)/sample.length;
+      return {rate,base:`Histórico ${vehicle}: ${sample.length} fretes próximos (KM médio ${avgKm.toFixed(0)})`,n:sample.length};
+    }
+  }
+  return {rate:nval($('fallbackRate').value)||0,base:`R$/km padrão (${vehicle})`,n:0};
+}
+function geocodeAddress(address){
+  return new Promise((resolve,reject)=>{
+    const g=new google.maps.Geocoder();
+    g.geocode({address},(res,status)=>status==='OK'&&res[0]?resolve(res[0].geometry.location):reject(new Error('Geocodificação: '+status)));
+  });
+}
+async function chooseStraightDestination(origin,stops){
+  if(stops.length<=1)return {destination:stops[0],waypoints:[]};
+  const originLoc=await geocodeAddress(origin);
+  const located=[];
+  for(const s of stops){
+    try{
+      const loc=await geocodeAddress(s);
+      const d=google.maps.geometry.spherical.computeDistanceBetween(originLoc,loc);
+      located.push({s,d});
+    }catch(e){ located.push({s,d:0}); }
+  }
+  located.sort((a,b)=>b.d-a.d);
+  const destination=located[0].s;
+  const waypoints=stops.filter(s=>s!==destination).map(x=>({location:x,stopover:true}));
+  return {destination,waypoints};
 }
 function directions(req){return new Promise((resolve,reject)=>directionsService.route(req,(r,s)=>s==='OK'?resolve(r):reject(new Error(s))))}
 async function calcRoute(row,idx){
   const origin=$('origin').value.trim(), stops=parseCities(row.cities,row.uf); if(!stops.length)throw new Error('Sem cidades');
   const returnToOrigin=$('roundTrip').checked;
   let destination, waypoints=[];
-  if(returnToOrigin){destination=origin; waypoints=stops.map(x=>({location:x,stopover:true}));}
-  else{destination=stops[stops.length-1]; waypoints=stops.slice(0,-1).map(x=>({location:x,stopover:true}));}
+  if(returnToOrigin){
+    destination=origin; waypoints=stops.map(x=>({location:x,stopover:true}));
+  } else {
+    // "Linha reta": escolhe como destino final a parada geograficamente mais distante da Mundial.
+    // As demais são otimizadas pelo Google no caminho, evitando voltar para trás.
+    const straight=await chooseStraightDestination(origin,stops);
+    destination=straight.destination; waypoints=straight.waypoints;
+  }
   const res=await directions({
     origin,destination,waypoints,optimizeWaypoints:$('optimize').checked,
     travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
@@ -185,9 +281,12 @@ async function calcRoute(row,idx){
   const rt=res.routes[0]; let meters=0, seconds=0; rt.legs.forEach(l=>{meters+=l.distance.value;seconds+=l.duration.value});
   let orderedStops;
   if(returnToOrigin){
-    const order=rt.waypoint_order||waypoints.map((_,i)=>i); orderedStops=order.map(i=>stops[i]);
+    const order=rt.waypoint_order||waypoints.map((_,i)=>i);
+    orderedStops=order.map(i=>stops[i]);
   } else {
-    const mids=stops.slice(0,-1); const order=rt.waypoint_order||waypoints.map((_,i)=>i); orderedStops=order.map(i=>mids[i]).concat(stops[stops.length-1]);
+    const mids=waypoints.map(w=>w.location);
+    const order=rt.waypoint_order||waypoints.map((_,i)=>i);
+    orderedStops=order.map(i=>mids[i]).concat(destination);
   }
   const km=meters/1000;
   const vehicle=row.vehicle || $('vehicleType').value;
@@ -224,6 +323,25 @@ window.showRoute=i=>{
   const r=results[i]; if(!r?.directions)return; directionsRenderer.setDirections(r.directions);
   $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} entregas | ${num(r.km)} km | ${money(r.rate)}/km | <b>${money(r.cost)}</b> | ${money(r.costPerDelivery)}/entrega | ${r.costBase}`;
 };
+
+ensureDefaultPass().then(loadSavedConfig);
+$('openConfigBtn').onclick=openAdmin;
+$('closeConfigBtn').onclick=closeAdmin;
+$('lockConfigBtn').onclick=closeAdmin;
+$('unlockBtn').onclick=async()=>{
+  const entered=await hashText($('adminPassword').value);
+  if(entered!==localStorage.getItem(PASS_KEY)){alert('Senha incorreta.');return;}
+  loadSavedConfig(); $('loginPanel').style.display='none'; $('settingsPanel').style.display='block';
+};
+$('saveConfigBtn').onclick=async()=>{
+  const cfg={apiKey:$('apiKey').value.trim(),fallbackRate:nval($('adminFallbackRate').value)||2.10};
+  localStorage.setItem(CONFIG_KEY,JSON.stringify(cfg));
+  $('fallbackRate').value=cfg.fallbackRate;
+  const np=$('newAdminPassword').value;
+  if(np){if(np.length<8){alert('Use uma senha com pelo menos 8 caracteres.');return;}localStorage.setItem(PASS_KEY,await hashText(np));$('newAdminPassword').value='';}
+  alert('Configurações salvas neste navegador.');
+};
+
 $('loadBtn').onclick=async()=>{
   try{
     const f=$('routeFile').files[0]; if(!f)throw new Error('Selecione a planilha de rotas.');
@@ -236,7 +354,7 @@ $('loadBtn').onclick=async()=>{
       cities:pick(r,['CIDADES/REGIÃO','CIDADES/REGIAO','CIDADES','REGIAO'])
     })).filter(r=>r.cities);
     await buildHistory();
-    $('calcBtn').disabled=!routeRows.length; setStatus(`${routeRows.length} rotas carregadas. ${historyRates.length?'Base histórica de veículos reconhecida.':'Usando R$/km padrão até carregar histórico.'}`);
+    $('calcBtn').disabled=!routeRows.length; setStatus(`${routeRows.length} rotas carregadas. ${historyObs.length?historyObs.length+' fretes históricos válidos reconhecidos.':'Usando R$/km padrão até carregar histórico.'}`);
   }catch(e){setStatus('Erro: '+e.message)}
 };
 $('calcBtn').onclick=async()=>{
