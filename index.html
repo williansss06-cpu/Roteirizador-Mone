@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Mesa | Roteirização e Custo V5</title>
+<title>Mesa | Roteirização e Custo V6</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{--navy:#083b6f;--blue:#0b5fa5;--light:#eef5fb;--orange:#f47c20;--green:#138a4b;--red:#c0392b;--text:#17324d;--line:#d7e4ef}
@@ -36,7 +36,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <body>
 <header>
   <h1>Mesa de Contratação | Roteirização e Custo</h1>
-  <p>V5: KM real Google → menor percurso → histórico robusto de preços → mapa clicável</p>
+  <p>V6: KM real Google → menor percurso → Tabela Mundial fixa → histórico comparativo</p>
 </header>
 <div class="wrap">
 <div class="grid">
@@ -52,7 +52,8 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
   <input id="routeFile" type="file" accept=".xlsx,.xls"/>
 
   <div class="sep"></div>
-  <h2>2. Custo Fiorino</h2>
+  <h2>2. Precificação</h2>
+  <div class="status"><b>Tabela Mundial embutida — Fiorino</b><br>Até 100 km: <b>R$ 320,00</b><br>Acima de 100 km: R$ 320,00 + KM excedente × tarifa da UF.<br><span class="small">Ex.: SP = R$ 2,56 por km excedente.</span></div>
   <label>Base histórica de fretes por veículo (.xlsx) — opcional</label>
   <input id="historyFile" type="file" accept=".xlsx,.xls"/>
   <div class="small">Se enviada, o sistema procura o mesmo veículo + UF e KM semelhante. Exige amostra mais robusta, amplia a janela quando necessário e limita outliers antes de calcular a mediana. Assim, um único frete caro não vira referência. A quantidade de entregas não multiplica o frete.</div>
@@ -111,7 +112,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     <h2>Rotas processadas</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM</th><th>R$/km ref.</th><th>Custo</th><th>Custo/entrega</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM</th><th>R$/km ref.</th><th>Custo</th><th>Custo/entrega</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -149,6 +150,23 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <script>
 let googleReady=false, map, directionsService, directionsRenderer;
 let routeRows=[], results=[], historyRates=[], historyObs=[];
+const FIXED_TARIFFS = {
+  FIORINO: {
+    baseKm: 100,
+    fixed: 320.00,
+    excessByUF: {"AC": 3.22, "AM": 3.24, "AP": 3.21, "PA": 3.25, "RO": 3.25, "RR": 3.26, "TO": 2.62, "DF": 1.91, "GO": 2.21, "MS": 2.3, "MT": 1.62, "AL": 2.05, "BA": 2.01, "CE": 1.62, "MA": 1.74, "PB": 1.88, "PE": 1.96, "PI": 1.7, "RN": 1.79, "SE": 2.14, "ES": 2.11, "MG": 2.05, "RJ": 2.53, "SP": 2.56, "PR": 2.46, "RS": 2.14, "SC": 2.19}
+  }
+};
+function tariffFor(km,uf,vehicle){
+  const t=FIXED_TARIFFS[norm(vehicle)];
+  if(!t) return null;
+  const excessRate=t.excessByUF[norm(uf)];
+  if(!Number.isFinite(excessRate)) return null;
+  const excessKm=Math.max(0,km-t.baseKm);
+  const value=t.fixed + excessKm*excessRate;
+  return {value,fixed:t.fixed,baseKm:t.baseKm,excessKm,excessRate,
+    base:`Tabela Mundial fixa | até ${t.baseKm} km = R$ ${t.fixed.toFixed(2)} | excedente ${excessKm.toFixed(1)} km × R$ ${excessRate.toFixed(2)}/${norm(uf)}`};
+}
 const $=id=>document.getElementById(id);
 const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(n||0);
 const num=n=>new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(n||0);
@@ -313,9 +331,16 @@ async function calcRoute(row,idx){
   const km=meters/1000;
   const vehicle=row.vehicle || $('vehicleType').value;
   const deliveries=Math.max(1, Number(row.deliveries || $('deliveryQty').value || stops.length || 1));
-  const rr=rateFor(km,row.uf,vehicle), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
-  const cost=(km*rr.rate+toll)*(1+margin);
-  return {...row,vehicle,deliveries,idx,km,seconds,rate:rr.rate,cost,costPerDelivery:cost/deliveries,costBase:rr.base,sampleN:rr.n||0,confidence:rr.confidence||'',sequence:orderedStops.map(x=>x.replace(', Brasil','')).join(' → '),directions:res,status:'OK'};
+  const rr=rateFor(km,row.uf,vehicle), tariff=tariffFor(km,row.uf,vehicle), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
+  const tableValue=tariff ? tariff.value : (km*rr.rate);
+  const cost=(tableValue+toll)*(1+margin);
+  const effectiveRate=km>0?tableValue/km:0;
+  const pricingMode=tariff?'TABELA MUNDIAL':'HISTÓRICO/FALLBACK';
+  const costBase=tariff?tariff.base:rr.base;
+  return {...row,vehicle,deliveries,idx,km,seconds,rate:effectiveRate,cost,costPerDelivery:cost/deliveries,costBase,
+    pricingMode,tableFixed:tariff?.fixed||0,tableBaseKm:tariff?.baseKm||0,excessKm:tariff?.excessKm||0,excessRate:tariff?.excessRate||0,
+    historicalRate:rr.rate,sampleN:rr.n||0,confidence:tariff?'TABELA FIXA':(rr.confidence||''),
+    sequence:orderedStops.map(x=>x.replace(', Brasil','')).join(' → '),directions:res,status:'OK'};
 }
 function render(){
   $('tbody').innerHTML=results.map((r,i)=>`<tr>
@@ -325,7 +350,7 @@ function render(){
     </select></td>
     <td><input type="number" min="1" value="${r.deliveries||1}" onchange="changeDeliveries(${i},this.value)" style="width:70px;padding:5px"></td>
     <td>${r.stores??''}</td><td>${r.sequence||''}</td><td>${num(r.km)}</td><td>${money(r.rate)}</td><td><b>${money(r.cost)}</b></td>
-    <td>${money(r.costPerDelivery)}</td><td><span class="badge">${r.confidence||''}</span></td><td>${r.costBase||''}</td>
+    <td>${money(r.costPerDelivery)}</td><td>${r.pricingMode||''}</td><td><span class="badge">${r.confidence||''}</span></td><td>${r.costBase||''}</td>
     <td class="${r.status==='OK'?'ok':'warn'}">${r.status}</td></tr>`).join('');
   const ok=results.filter(x=>x.status==='OK'), km=ok.reduce((a,b)=>a+b.km,0), cost=ok.reduce((a,b)=>a+b.cost,0);
   $('kRoutes').textContent=results.length;$('kKm').textContent=num(km)+' km';$('kCost').textContent=money(cost);$('kRate').textContent=money(km?cost/km:0);
@@ -333,8 +358,12 @@ function render(){
 window.changeVehicle=(i,v)=>{
   const r=results[i]; if(!r)return;
   r.vehicle=v;
-  const rr=rateFor(r.km,r.uf,v), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
-  r.rate=rr.rate; r.costBase=rr.base; r.sampleN=rr.n||0; r.confidence=rr.confidence||''; r.cost=(r.km*r.rate+toll)*(1+margin); r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
+  const rr=rateFor(r.km,r.uf,v), tariff=tariffFor(r.km,r.uf,v), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
+  const tableValue=tariff?tariff.value:(r.km*rr.rate);
+  r.rate=r.km>0?tableValue/r.km:0; r.costBase=tariff?tariff.base:rr.base; r.sampleN=rr.n||0;
+  r.confidence=tariff?'TABELA FIXA':(rr.confidence||''); r.pricingMode=tariff?'TABELA MUNDIAL':'HISTÓRICO/FALLBACK';
+  r.tableFixed=tariff?.fixed||0; r.excessKm=tariff?.excessKm||0; r.excessRate=tariff?.excessRate||0;
+  r.historicalRate=rr.rate; r.cost=(tableValue+toll)*(1+margin); r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
   render();
 };
 window.changeDeliveries=(i,q)=>{
@@ -343,7 +372,7 @@ window.changeDeliveries=(i,q)=>{
 };
 window.showRoute=i=>{
   const r=results[i]; if(!r?.directions)return; directionsRenderer.setDirections(r.directions);
-  $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} entregas | ${num(r.km)} km | ${money(r.rate)}/km | <b>${money(r.cost)}</b> | ${money(r.costPerDelivery)}/entrega | ${r.costBase}`;
+  $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} entregas | ${num(r.km)} km | <b>${money(r.cost)}</b> | ${money(r.costPerDelivery)}/entrega | ${r.costBase}`;
 };
 
 ensureDefaultPass().then(loadSavedConfig);
@@ -396,7 +425,7 @@ $('calcBtn').onclick=async()=>{
 $('exportBtn').onclick=()=>{
   const data=results.map(r=>({
     ROTA:r.route,DIA:r.day,UF:r.uf,VEICULO:r.vehicle,'QTD ENTREGA':r.deliveries,FORNECEDOR:r.supplier,LOJAS:r.stores,'CIDADES/REGIÃO':r.cities,
-    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'R$/KM REFERÊNCIA':r.rate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
+    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'R$/KM REFERÊNCIA':r.rate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'MODO PRECIFICAÇÃO':r.pricingMode,'FIXO ATÉ 100 KM':r.tableFixed,'KM EXCEDENTE':r.excessKm,'R$/KM EXCEDENTE':r.excessRate,'R$/KM HISTÓRICO COMPARATIVO':r.historicalRate,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
   }));
   const ws=XLSX.utils.json_to_sheet(data), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rotas Roteirizadas');
   XLSX.writeFile(wb,'Rotas_Roteirizadas_Mesa.xlsx');
