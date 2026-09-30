@@ -36,7 +36,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 <body>
 <header>
   <h1>Mesa de Contratação | Montagem Automática de Rotas</h1>
-  <p>V10: planilha crua → filtro por UF → montagem automática → validação de endereços → KM Google → custo</p>
+  <p>V11: planilha crua → filtro por UF → montagem automática → sequência resumida por cidade → KM Google → custo</p>
 </header>
 <div class="wrap">
 <div class="grid">
@@ -119,14 +119,14 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     <h2>Mapa da rota selecionada</h2>
     <div id="map"></div>
     <div id="routeSummary" class="small" style="margin-top:8px">Clique em uma rota após o processamento.</div>
-    <div class="small" style="margin-top:6px"><b>Regra V10:</b> a UF é identificada pelo CEP. As entregas são agrupadas por base + UF e aproximadas por CEP; depois o Google otimiza a sequência dentro de cada rota. Uma rota nunca mistura UFs.</div>
+    <div class="small" style="margin-top:6px"><b>Regra V11:</b> a UF é identificada pelo CEP. As entregas são agrupadas por base + UF e aproximadas por CEP; depois o Google otimiza a sequência dentro de cada rota. Uma rota nunca mistura UFs.</div>
   </div>
 
   <div class="card" style="margin-top:12px">
     <h2>Rotas processadas</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Rota</th><th>Base</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM total</th><th>Fixo até 100 km</th><th>KM excedente</th><th>R$/km excedente</th><th>Custo</th><th>Custo/entrega</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Rota</th><th>Base</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência por cidade</th><th>KM total</th><th>Fixo até 100 km</th><th>KM excedente</th><th>R$/km excedente</th><th>Custo</th><th>Custo/entrega</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -303,6 +303,22 @@ async function chooseLinearRoute(origin,stops){
   return {destination:stops[stops.length-1],waypoints:stops.slice(0,-1).map(x=>({location:x,stopover:true})),preview:null};
 }
 function directions(req){return new Promise((resolve,reject)=>directionsService.route(req,(r,s)=>s==='OK'?resolve(r):reject(new Error(s))))}
+
+function cityFromFullAddress(addr){
+  const p=String(addr||'').replace(', Brasil','').split(',').map(x=>x.trim()).filter(Boolean);
+  const ufIdx=p.findIndex(x=>/^[A-Z]{2}$/i.test(x));
+  return ufIdx>0 ? p[ufIdx-1] : (p.length>=3?p[p.length-3]:String(addr||''));
+}
+function compactCitySequence(addresses){
+  const out=[];
+  (addresses||[]).map(cityFromFullAddress).filter(Boolean).forEach(city=>{
+    const last=out[out.length-1];
+    if(last && norm(last.city)===norm(city)) last.count++;
+    else out.push({city,count:1});
+  });
+  return out.map(x=>x.count>1?`${x.city} (${x.count})`:x.city).join(' → ');
+}
+
 async function calcRoute(row,idx){
   const origin=(row.origin||'').trim();
   const stops=(row.stops&&row.stops.length)?row.stops:parseCities(row.cities,row.uf);
@@ -345,7 +361,7 @@ async function calcRoute(row,idx){
   return {...row,vehicle,deliveries,idx,km,seconds,rate:effectiveRate,cost,costPerDelivery:cost/deliveries,costBase,
     pricingMode,tableFixed:tariff?.fixed||0,tableBaseKm:tariff?.baseKm||0,excessKm:tariff?.excessKm||0,excessRate:tariff?.excessRate||0,
     historicalRate:rr.rate,sampleN:rr.n||0,confidence:tariff?'TABELA FIXA':(rr.confidence||''),
-    sequence:orderedStops.map(x=>x.replace(', Brasil','')).join(' → '),directions:res,status:'OK'};
+    sequence:compactCitySequence(orderedStops),directions:res,status:'OK'};
 }
 function render(){
   $('tbody').innerHTML=results.map((r,i)=>`<tr>
@@ -524,7 +540,7 @@ $('calcBtn').onclick=async()=>{
 $('exportBtn').onclick=()=>{
   const data=results.map(r=>({
     ROTA:r.route,UF:r.uf,'BASE DE RETIRADA':r.supplier,'ENDEREÇO DA BASE':r.origin,VEICULO:r.vehicle,'QTD ENTREGA':r.deliveries,LOJAS:r.stores,'CIDADES/REGIÃO':r.cities,
-    'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'FIXO ATÉ 100 KM':r.tableFixed,'KM EXCEDENTE':r.excessKm,'R$/KM EXCEDENTE':r.excessRate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'MODO PRECIFICAÇÃO':r.pricingMode,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
+    'SEQUÊNCIA POR CIDADE':r.sequence,'KM GOOGLE':r.km,'FIXO ATÉ 100 KM':r.tableFixed,'KM EXCEDENTE':r.excessKm,'R$/KM EXCEDENTE':r.excessRate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'MODO PRECIFICAÇÃO':r.pricingMode,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
   }));
   const ws=XLSX.utils.json_to_sheet(data), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rotas Roteirizadas');
   const detail=[];
