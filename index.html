@@ -35,8 +35,8 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 </head>
 <body>
 <header>
-  <h1>Mesa de Contratação | Roteirização e Custo</h1>
-  <p>V8: KM real Google → menor percurso → fixo até 100 km + KM excedente</p>
+  <h1>Mesa de Contratação | Montagem Automática de Rotas</h1>
+  <p>V9: planilha crua → filtro por UF → montagem automática das rotas → KM Google → custo</p>
 </header>
 <div class="wrap">
 <div class="grid">
@@ -45,11 +45,25 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
   <div class="configbar"><button class="secondary" id="openConfigBtn">⚙ Configurações do administrador</button></div>
   <div class="small">A credencial do Google Maps e os parâmetros de custo ficam na área protegida do administrador.</div>
 
-  <label>Origem</label>
-  <input id="origin" value="Estrada Velha Guarulhos São Miguel, 1971, Guarulhos - SP"/>
+  <div class="status"><b>Entrada:</b> planilha crua de entregas.<br>
+  O sistema identifica a UF pelo CEP, separa por base de retirada e <b>nunca mistura UFs na mesma rota</b>.</div>
 
-  <label>Planilha de rotas (.xlsx)</label>
+  <label>Planilha crua de entregas (.xlsx)</label>
   <input id="routeFile" type="file" accept=".xlsx,.xls"/>
+
+  <div class="row2">
+    <div>
+      <label>UF para roteirizar</label>
+      <select id="ufFilter" disabled><option value="TODAS">Todas as UFs</option></select>
+    </div>
+    <div>
+      <label>Máximo de entregas por rota</label>
+      <input id="maxStops" type="number" min="1" max="20" step="1" value="8"/>
+    </div>
+  </div>
+
+  <div id="rawSummary" class="status">Carregue a planilha para visualizar as UFs disponíveis.</div>
+  <input id="origin" type="hidden" value=""/>
 
   <div class="sep"></div>
   <h2>2. Precificação</h2>
@@ -72,7 +86,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
       </select>
     </div>
     <div>
-      <label>Quantidade de entregas</label>
+      <label>Entregas padrão (fallback)</label>
       <input id="deliveryQty" type="number" min="1" step="1" value="1"/>
     </div>
   </div>
@@ -88,9 +102,9 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
   <label><input id="optimize" type="checkbox" checked style="width:auto;margin-right:7px"/> Otimizar sequência das paradas</label>
 
   <button id="loadBtn">Carregar planilha</button>
-  <button id="calcBtn" class="orange" disabled>Roteirizar todas as rotas</button>
+  <button id="calcBtn" class="orange" disabled>Montar e calcular rotas</button>
   <button id="exportBtn" class="secondary" disabled>Exportar resultado para Excel</button>
-  <div id="status" class="status">Aguardando planilha.</div>
+  <div id="status" class="status">Aguardando planilha crua.</div>
 </aside>
 
 <main>
@@ -105,14 +119,14 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
     <h2>Mapa da rota selecionada</h2>
     <div id="map"></div>
     <div id="routeSummary" class="small" style="margin-top:8px">Clique em uma rota após o processamento.</div>
-    <div class="small" style="margin-top:6px"><b>Regra V5:</b> sem retorno à base, o sistema testa as paradas como destino final usando somente o serviço de rotas e escolhe o menor percurso. Não depende da Geocoding API.</div>
+    <div class="small" style="margin-top:6px"><b>Regra V9:</b> a UF é identificada pelo CEP. As entregas são agrupadas por base + UF e aproximadas por CEP; depois o Google otimiza a sequência dentro de cada rota. Uma rota nunca mistura UFs.</div>
   </div>
 
   <div class="card" style="margin-top:12px">
     <h2>Rotas processadas</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Rota</th><th>Dia</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM total</th><th>Fixo até 100 km</th><th>KM excedente</th><th>R$/km excedente</th><th>Custo</th><th>Custo/entrega</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Rota</th><th>Base</th><th>UF</th><th>Veículo</th><th>Entregas</th><th>Lojas</th><th>Sequência otimizada</th><th>KM total</th><th>Fixo até 100 km</th><th>KM excedente</th><th>R$/km excedente</th><th>Custo</th><th>Custo/entrega</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -149,7 +163,7 @@ td{padding:8px;border-bottom:1px solid #e5edf4;white-space:nowrap}tr:hover{backg
 
 <script>
 let googleReady=false, map, directionsService, directionsRenderer;
-let routeRows=[], results=[], historyRates=[], historyObs=[];
+let rawRows=[], routeRows=[], results=[], historyRates=[], historyObs=[];
 const FIXED_TARIFFS = {
   FIORINO: {
     baseKm: 100,
@@ -384,23 +398,106 @@ $('saveConfigBtn').onclick=async()=>{
   alert('Configurações salvas neste navegador.');
 };
 
+
+function onlyDigits(v){return String(v??'').replace(/\D/g,'');}
+function ufFromCep(v){
+  const s=onlyDigits(v).padStart(8,'0'); if(s.length!==8)return '';
+  const n=Number(s);
+  const ranges=[
+    ['SP',1000000,19999999],['RJ',20000000,28999999],['ES',29000000,29999999],
+    ['MG',30000000,39999999],['BA',40000000,48999999],['SE',49000000,49999999],
+    ['PE',50000000,56999999],['AL',57000000,57999999],['PB',58000000,58999999],
+    ['RN',59000000,59999999],['CE',60000000,63999999],['PI',64000000,64999999],
+    ['MA',65000000,65999999],['PA',66000000,68899999],['AP',68900000,68999999],
+    ['AM',69000000,69299999],['RR',69300000,69399999],['AM',69400000,69899999],
+    ['AC',69900000,69999999],['DF',70000000,72799999],['GO',72800000,76799999],
+    ['RO',76800000,76999999],['TO',77000000,77999999],['MT',78000000,78899999],
+    ['MS',79000000,79999999],['PR',80000000,87999999],['SC',88000000,89999999],
+    ['RS',90000000,99999999]
+  ];
+  for(const [uf,a,b] of ranges)if(n>=a&&n<=b)return uf;
+  return '';
+}
+function fullAddress(r){
+  return [r.address,r.neighborhood,r.city,r.uf,r.cep,'Brasil'].filter(Boolean).join(', ');
+}
+function buildAutoRoutes(rows,maxStops){
+  const groups={};
+  rows.forEach(r=>{
+    const key=`${norm(r.baseName)}|${norm(r.baseAddress)}|${r.uf}`;
+    (groups[key]??=[]).push(r);
+  });
+  const routes=[]; let seq=1;
+  Object.values(groups).forEach(group=>{
+    // CEP is used as a geographic proxy for the first consolidation pass.
+    group.sort((a,b)=>Number(onlyDigits(a.cep))-Number(onlyDigits(b.cep)));
+    for(let i=0;i<group.length;i+=maxStops){
+      const chunk=group.slice(i,i+maxStops);
+      const cities=[...new Set(chunk.map(x=>x.city).filter(Boolean))];
+      routes.push({
+        route:`ROTA-${String(seq++).padStart(3,'0')}`,
+        day:'', uf:chunk[0].uf, supplier:chunk[0].baseName||'',
+        stores:chunk.length, vehicle:$('vehicleType').value, deliveries:chunk.length,
+        cities:cities.join(' → '),
+        origin:chunk[0].baseAddress,
+        stops:chunk.map(x=>fullAddress(x)),
+        rawStops:chunk
+      });
+    }
+  });
+  return routes;
+}
+function updateRawSummary(){
+  const uf=$('ufFilter').value;
+  const selected=uf==='TODAS'?rawRows:rawRows.filter(r=>r.uf===uf);
+  const cities=new Set(selected.map(r=>r.city).filter(Boolean));
+  const bases=new Set(selected.map(r=>`${r.baseName}|${r.baseAddress}`));
+  const maxStops=Math.max(1,Number($('maxStops').value)||8);
+  const projected=buildAutoRoutes(selected,maxStops).length;
+  $('rawSummary').innerHTML=`<b>${selected.length}</b> entregas | <b>${cities.size}</b> cidades | <b>${bases.size}</b> bases | projeção inicial: <b>${projected}</b> rotas de até ${maxStops} entregas`;
+}
+$('ufFilter').onchange=updateRawSummary;
+$('maxStops').oninput=()=>{if(rawRows.length)updateRawSummary();};
+
 $('loadBtn').onclick=async()=>{
   try{
-    const f=$('routeFile').files[0]; if(!f)throw new Error('Selecione a planilha de rotas.');
-    setStatus('Lendo planilha...');
+    const f=$('routeFile').files[0]; if(!f)throw new Error('Selecione a planilha crua de entregas.');
+    setStatus('Lendo planilha crua...');
     const rows=await readExcel(f);
-    routeRows=rows.map((r,i)=>({
-      route:pick(r,['ROTA'])||`ROTA-${i+1}`,day:pick(r,['DIA']),uf:pick(r,['UF'])||'SP',supplier:pick(r,['FORNECEDOR']),
-      stores:pick(r,['LOJAS']),vehicle:norm(pick(r,['VEICULO','VEÍCULO','TIPO VEICULO']))||$('vehicleType').value,
-      deliveries:nval(pick(r,['QTD ENTREGA','QTD ENTREGAS','QUANTIDADE ENTREGA','ENTREGAS']))||nval($('deliveryQty').value)||1,
-      cities:pick(r,['CIDADES/REGIÃO','CIDADES/REGIAO','CIDADES','REGIAO'])
-    })).filter(r=>r.cities);
-    $('calcBtn').disabled=!routeRows.length; setStatus(`${routeRows.length} rotas carregadas. Tabela Mundial fixa pronta para cálculo.`);
+    rawRows=rows.map((r,i)=>{
+      const cep=pick(r,['CEP','CEP DESTINO','CEP_DESTINO']);
+      const uf=norm(pick(r,['UF','UF DESTINO']))||ufFromCep(cep);
+      return {
+        id:i+1,
+        cnpj:pick(r,['CNPJ']),
+        customer:pick(r,['DESTINATÁRIO','DESTINATARIO','CLIENTE']),
+        address:pick(r,['ENDEREÇO','ENDERECO']),
+        neighborhood:pick(r,['BAIRRO']),
+        city:pick(r,['CIDADE','MUNICIPIO','MUNICÍPIO']),
+        cep:cep,
+        uf:uf,
+        baseName:pick(r,['BASE DE RETIRADA','BASE RETIRADA']),
+        baseAddress:pick(r,['ENDEREÇO DA BASE','ENDERECO DA BASE'])
+      };
+    }).filter(r=>r.address&&r.city&&r.cep&&r.uf&&r.baseAddress);
+    if(!rawRows.length)throw new Error('Não encontrei linhas válidas com endereço, cidade, CEP e endereço da base.');
+    const ufs=[...new Set(rawRows.map(r=>r.uf))].sort();
+    $('ufFilter').innerHTML='<option value="TODAS">Todas as UFs (separadas)</option>'+ufs.map(u=>`<option value="${u}">${u}</option>`).join('');
+    $('ufFilter').disabled=false;
+    updateRawSummary();
+    $('calcBtn').disabled=false;
+    setStatus(`${rawRows.length} entregas carregadas em ${ufs.length} UFs. Selecione a UF e clique em “Montar e calcular rotas”.`);
   }catch(e){setStatus('Erro: '+e.message)}
 };
 $('calcBtn').onclick=async()=>{
   try{
-    $('calcBtn').disabled=true; results=[]; await loadGoogle();
+    $('calcBtn').disabled=true; results=[];
+    const selectedUF=$('ufFilter').value;
+    const selected=selectedUF==='TODAS'?rawRows:rawRows.filter(r=>r.uf===selectedUF);
+    const maxStops=Math.max(1,Math.min(20,Number($('maxStops').value)||8));
+    routeRows=buildAutoRoutes(selected,maxStops);
+    if(!routeRows.length)throw new Error('Nenhuma entrega encontrada para o filtro selecionado.');
+    await loadGoogle();
     for(let i=0;i<routeRows.length;i++){
       setStatus(`Roteirizando ${i+1}/${routeRows.length}: ${routeRows[i].route}...`);
       try{results.push(await calcRoute(routeRows[i],i));}
@@ -414,11 +511,18 @@ $('calcBtn').onclick=async()=>{
 };
 $('exportBtn').onclick=()=>{
   const data=results.map(r=>({
-    ROTA:r.route,DIA:r.day,UF:r.uf,VEICULO:r.vehicle,'QTD ENTREGA':r.deliveries,FORNECEDOR:r.supplier,LOJAS:r.stores,'CIDADES/REGIÃO':r.cities,
+    ROTA:r.route,UF:r.uf,'BASE DE RETIRADA':r.supplier,'ENDEREÇO DA BASE':r.origin,VEICULO:r.vehicle,'QTD ENTREGA':r.deliveries,LOJAS:r.stores,'CIDADES/REGIÃO':r.cities,
     'SEQUÊNCIA OTIMIZADA':r.sequence,'KM GOOGLE':r.km,'FIXO ATÉ 100 KM':r.tableFixed,'KM EXCEDENTE':r.excessKm,'R$/KM EXCEDENTE':r.excessRate,'CUSTO PROJETADO':r.cost,'CUSTO POR ENTREGA':r.costPerDelivery,'MODO PRECIFICAÇÃO':r.pricingMode,'CONFIANÇA PREÇO':r.confidence,'AMOSTRA HISTÓRICA':r.sampleN,'BASE DO CUSTO':r.costBase,STATUS:r.status
   }));
   const ws=XLSX.utils.json_to_sheet(data), wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Rotas Roteirizadas');
-  XLSX.writeFile(wb,'Rotas_Roteirizadas_Mesa.xlsx');
+  const detail=[];
+  results.forEach(r=>(r.rawStops||[]).forEach((x,j)=>detail.push({
+    ROTA:r.route,UF:r.uf,'ORDEM INICIAL':j+1,CNPJ:x.cnpj,'DESTINATÁRIO':x.customer,
+    ENDEREÇO:x.address,BAIRRO:x.neighborhood,CIDADE:x.city,CEP:x.cep,
+    'BASE DE RETIRADA':x.baseName,'ENDEREÇO DA BASE':x.baseAddress
+  })));
+  if(detail.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(detail),'Entregas por Rota');
+  XLSX.writeFile(wb,'Rotas_Automaticas_Mesa.xlsx');
 };
 </script>
 </body>
