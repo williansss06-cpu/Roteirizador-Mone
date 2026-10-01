@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.4</title>
+<title>M'one | Roteirizador de Transporte V18.5</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -766,13 +766,13 @@ function cityKey(r){return norm(r.city||'');}
    O Google calcula a malha rodoviária depois; ele não decide quais destinos pertencem ao corredor. */
 const AXIS_CITY = {
   DUTRA_RJ:['GUARULHOS','ARUJA','SANTA ISABEL','JACAREI','SAO JOSE DOS CAMPOS','CACAPAVA','TAUBATE','PINDAMONHANGABA','APARECIDA','GUARATINGUETA','LORENA','CRUZEIRO','QUELUZ','RESENDE','BARRA MANSA','VOLTA REDONDA','RIO DE JANEIRO'],
-  ANHANGUERA_BANDEIRANTES:['CAJAMAR','JUNDIAI','LOUVEIRA','VINHEDO','VALINHOS','CAMPINAS','SUMARE','AMERICANA','LIMEIRA','RIO CLARO','PIRACICABA'],
+  ANHANGUERA_BANDEIRANTES:['CAJAMAR','JUNDIAI','LOUVEIRA','VINHEDO','VALINHOS','CAMPINAS','SUMARE','HORTOLANDIA','PAULINIA','AMERICANA','SANTA BARBARA D OESTE','LIMEIRA','ARARAS','LEME','RIO CLARO','PIRACICABA'],
   CASTELO_BRANCO:['BARUERI','SANTANA DE PARNAIBA','ITU','SOROCABA','BOITUVA','TATUI'],
   RAPOSO:['COTIA','VARGEM GRANDE PAULISTA','SAO ROQUE','SOROCABA','ITAPETININGA','PRESIDENTE PRUDENTE'],
   DUTRA_SP:['SAO PAULO','GUARULHOS'],
   FERNÃO_DIAS:['MAIRIPORA','ATIBAIA','BRAGANCA PAULISTA','POUSO ALEGRE','EXTREMA','CAMBUI','CAMANDUCAIA','BELO HORIZONTE'],
-  WASHINGTON_LUIS_MARECHAL:['JUNDIAI','CAMPINAS','LIMEIRA','RIO CLARO','SAO CARLOS','ARARAQUARA','MATAO','SAO JOSE DO RIO PRETO','MIRASSOL'],
-  CASTELO_MARECHAL_OESTE:['SOROCABA','BOITUVA','BOTUCATU','BAURU','LINS','BIRIGUI','ARACATUBA']
+  WASHINGTON_LUIS_MARECHAL:['JUNDIAI','CAMPINAS','SUMARE','HORTOLANDIA','PAULINIA','AMERICANA','SANTA BARBARA D OESTE','LIMEIRA','RIO CLARO','SAO CARLOS','ARARAQUARA','MATAO','CATANDUVA','SAO JOSE DO RIO PRETO','MIRASSOL','OLIMPIA','VOTUPORANGA','FERNANDOPOLIS'],
+  CASTELO_MARECHAL_OESTE:['BARUERI','SANTANA DE PARNAIBA','ITU','SOROCABA','VOTORANTIM','BOITUVA','TIETE','BOTUCATU','BAURU','LINS','MARILIA','BIRIGUI','ARACATUBA']
 };
 function axisInfo(r){
   const c=cityKey(r);
@@ -794,35 +794,13 @@ function buildCorridorRoutes(rows,maxStops){
   Object.entries(buckets).forEach(([axis,group])=>{
     // Strictly progressive: near -> far on the same outbound axis.
     group.sort((a,b)=>a._rank-b._rank || cepNum(a)-cepNum(b));
-    // Consolidar primeiro por cidade. A mesma cidade só é dividida se ultrapassar maxStops.
-    const cityBlocks=[];
-    group.forEach(r=>{
-      const key=cityKey(r);
-      let b=cityBlocks.find(x=>x.key===key);
-      if(!b){b={key,rows:[],rank:r._rank};cityBlocks.push(b);}
-      b.rows.push(r);
-    });
-    cityBlocks.sort((a,b)=>a.rank-b.rank);
-
-    const chunks=[]; let current=[];
-    cityBlocks.forEach(block=>{
-      let pending=[...block.rows];
-      while(pending.length){
-        const space=maxStops-current.length;
-        if(space===0){chunks.push(current);current=[];continue;}
-        // If a whole city fits, keep it intact in the current route.
-        if(pending.length<=space){current.push(...pending);pending=[];}
-        else if(current.length===0){
-          // City alone exceeds vehicle/stop limit: split only because it is unavoidable.
-          current.push(...pending.splice(0,maxStops));chunks.push(current);current=[];
-        }else{
-          // Do not fragment a city merely to fill the previous route.
-          chunks.push(current);current=[];
-        }
-      }
-    });
-    if(current.length)chunks.push(current);
-
+    // V18.5 — consolidação por corredor: preencher a rota até o limite, sempre no sentido de avanço.
+    const ordered=[];
+    const blocks={};
+    group.forEach(r=>{const k=cityKey(r);(blocks[k]??=[]).push(r);});
+    Object.values(blocks).sort((a,b)=>a[0]._rank-b[0]._rank).forEach(b=>ordered.push(...b));
+    const chunks=[];
+    for(let i=0;i<ordered.length;i+=maxStops) chunks.push(ordered.slice(i,i+maxStops));
     chunks.forEach(chunk=>{
       const cities=[];
       chunk.forEach(x=>{if(x.city && !cities.includes(x.city))cities.push(x.city)});
