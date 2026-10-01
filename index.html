@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.3</title>
+<title>M'one | Roteirizador de Transporte V18.4</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -794,8 +794,36 @@ function buildCorridorRoutes(rows,maxStops){
   Object.entries(buckets).forEach(([axis,group])=>{
     // Strictly progressive: near -> far on the same outbound axis.
     group.sort((a,b)=>a._rank-b._rank || cepNum(a)-cepNum(b));
-    for(let i=0;i<group.length;i+=maxStops){
-      const chunk=group.slice(i,i+maxStops);
+    // Consolidar primeiro por cidade. A mesma cidade só é dividida se ultrapassar maxStops.
+    const cityBlocks=[];
+    group.forEach(r=>{
+      const key=cityKey(r);
+      let b=cityBlocks.find(x=>x.key===key);
+      if(!b){b={key,rows:[],rank:r._rank};cityBlocks.push(b);}
+      b.rows.push(r);
+    });
+    cityBlocks.sort((a,b)=>a.rank-b.rank);
+
+    const chunks=[]; let current=[];
+    cityBlocks.forEach(block=>{
+      let pending=[...block.rows];
+      while(pending.length){
+        const space=maxStops-current.length;
+        if(space===0){chunks.push(current);current=[];continue;}
+        // If a whole city fits, keep it intact in the current route.
+        if(pending.length<=space){current.push(...pending);pending=[];}
+        else if(current.length===0){
+          // City alone exceeds vehicle/stop limit: split only because it is unavoidable.
+          current.push(...pending.splice(0,maxStops));chunks.push(current);current=[];
+        }else{
+          // Do not fragment a city merely to fill the previous route.
+          chunks.push(current);current=[];
+        }
+      }
+    });
+    if(current.length)chunks.push(current);
+
+    chunks.forEach(chunk=>{
       const cities=[];
       chunk.forEach(x=>{if(x.city && !cities.includes(x.city))cities.push(x.city)});
       const ufs=[...new Set(chunk.map(x=>x.uf).filter(Boolean))];
@@ -807,7 +835,7 @@ function buildCorridorRoutes(rows,maxStops){
         stops:chunk.map(x=>fullAddress(x)),rawStops:chunk,corridor:axis,
         lockSequence:true
       });
-    }
+    });
   });
   return routes;
 }
