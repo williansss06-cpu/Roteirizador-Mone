@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirização e Positivação V16</title>
+<title>M'one | Roteirização e Positivação V17</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -381,6 +381,11 @@ main{width:100%}
     </div>
     <div id="settingsPanel" style="display:none">
       <h2>Parâmetros protegidos</h2>
+      <div class="status"><b>Configuração central via Supabase</b><br>A URL e a anon key identificam o projeto. A chave Google Maps e os parâmetros operacionais passam a ser lidos da tabela <b>mone_configuracoes</b>.</div>
+      <label>Supabase URL</label>
+      <input id="supabaseUrl" type="text" placeholder="https://SEU-PROJETO.supabase.co"/>
+      <label>Supabase Anon Key</label>
+      <input id="supabaseAnonKey" type="password" placeholder="eyJ..."/>
       <label>Chave Google Maps</label>
       <input id="apiKey" type="password" placeholder="Cole sua API Key"/>
       <label>R$/km padrão</label>
@@ -389,11 +394,12 @@ main{width:100%}
       <input id="newAdminPassword" type="password" placeholder="Deixe vazio para manter"/>
       <button id="saveConfigBtn">Salvar configurações</button>
       <button class="secondary" id="lockConfigBtn">Fechar e bloquear</button>
-      <div class="lockmsg">As configurações são armazenadas localmente neste navegador. Para segurança real em produção, use autenticação e backend.</div>
+      <div class="lockmsg">A URL e a anon key ficam no navegador para permitir a conexão. A configuração operacional fica centralizada no Supabase. Restrinja a chave Google Maps por domínio no Google Cloud.</div>
     </div>
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 let googleReady=false, map, directionsService, directionsRenderer;
 let rawRows=[], routeRows=[], results=[], historyRates=[], historyObs=[];
@@ -419,8 +425,9 @@ const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).
 const num=n=>new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(n||0);
 const norm=s=>(s??'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
 
-const CONFIG_KEY='mone_route_config_v14';
-const PASS_KEY='mone_route_admin_hash_v14';
+const CONNECTION_KEY='mone_supabase_connection_v17';
+const PASS_KEY='mone_route_admin_hash_v17';
+let sb=null;
 async function hashText(s){
   const data=new TextEncoder().encode(s);
   const digest=await crypto.subtle.digest('SHA-256',data);
@@ -429,12 +436,48 @@ async function hashText(s){
 async function ensureDefaultPass(){
   if(!localStorage.getItem(PASS_KEY)) localStorage.setItem(PASS_KEY,await hashText('Mundial@2026'));
 }
-function loadSavedConfig(){
+function getConnection(){
+  try{return JSON.parse(localStorage.getItem(CONNECTION_KEY)||'{}')}catch(e){return {}}
+}
+function connectSupabase(url,key){
+  if(!url||!key||!window.supabase)return null;
+  sb=window.supabase.createClient(url,key);
+  return sb;
+}
+async function loadRemoteConfig(showError=false){
+  const c=getConnection();
+  if(c.url) $('supabaseUrl').value=c.url;
+  if(c.anonKey) $('supabaseAnonKey').value=c.anonKey;
+  if(!c.url||!c.anonKey)return false;
   try{
-    const c=JSON.parse(localStorage.getItem(CONFIG_KEY)||'{}');
-    if(c.apiKey) $('apiKey').value=c.apiKey;
-    if(c.fallbackRate){$('fallbackRate').value=c.fallbackRate;$('adminFallbackRate').value=c.fallbackRate;}
-  }catch(e){}
+    connectSupabase(c.url,c.anonKey);
+    const {data,error}=await sb.from('mone_configuracoes').select('*').eq('id',1).single();
+    if(error)throw error;
+    if(data?.google_maps_api_key)$('apiKey').value=data.google_maps_api_key;
+    if(Number.isFinite(Number(data?.fallback_rate))){
+      $('fallbackRate').value=Number(data.fallback_rate);
+      $('adminFallbackRate').value=Number(data.fallback_rate);
+    }
+    return true;
+  }catch(e){
+    if(showError)alert('Não foi possível ler a configuração do Supabase: '+e.message);
+    return false;
+  }
+}
+async function saveRemoteConfig(){
+  const url=$('supabaseUrl').value.trim(), anonKey=$('supabaseAnonKey').value.trim();
+  if(!url||!anonKey)throw new Error('Informe Supabase URL e Anon Key.');
+  localStorage.setItem(CONNECTION_KEY,JSON.stringify({url,anonKey}));
+  connectSupabase(url,anonKey);
+  const payload={
+    id:1,
+    google_maps_api_key:$('apiKey').value.trim(),
+    fallback_rate:nval($('adminFallbackRate').value)||2.10,
+    updated_at:new Date().toISOString()
+  };
+  const {error}=await sb.from('mone_configuracoes').upsert(payload,{onConflict:'id'});
+  if(error)throw error;
+  $('fallbackRate').value=payload.fallback_rate;
 }
 function openAdmin(){ $('configModal').classList.add('open'); $('loginPanel').style.display='block'; $('settingsPanel').style.display='none'; $('adminPassword').value=''; }
 function closeAdmin(){ $('configModal').classList.remove('open'); $('apiKey').type='password'; }
@@ -444,7 +487,8 @@ function setStatus(t){$('status').textContent=t}
 function loadGoogle(){
   return new Promise((resolve,reject)=>{
     if(window.google?.maps){googleReady=true;initMap();return resolve();}
-    const key=$('apiKey').value.trim(); if(!key)return reject(new Error('Informe a chave do Google Maps.'));
+    if(!$('apiKey').value.trim()) await loadRemoteConfig(false);
+    const key=$('apiKey').value.trim(); if(!key)return reject(new Error('Chave Google Maps não encontrada no Supabase. Abra ⚙ Parâmetros > Administrador.'));
     window.__gmcb=()=>{googleReady=true;initMap();resolve();}
     const s=document.createElement('script');
     s.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&callback=__gmcb&libraries=geometry`;
@@ -648,22 +692,25 @@ window.showRoute=i=>{
   $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} positivações | ${num(r.km)} km<br><b>Frete:</b> ${money(r.freightCost||0)} | <b>Serviço:</b> ${money(r.serviceCost||0)} | <b>Total:</b> ${money(r.cost)} | ${money(r.costPerDelivery)}/positivação<br><b>Cálculo do frete:</b> ${r.costBase}`;
 };
 
-ensureDefaultPass().then(loadSavedConfig);
+ensureDefaultPass().then(()=>loadRemoteConfig(false));
 $('openConfigBtn').onclick=openAdmin;
 $('closeConfigBtn').onclick=closeAdmin;
 $('lockConfigBtn').onclick=closeAdmin;
 $('unlockBtn').onclick=async()=>{
   const entered=await hashText($('adminPassword').value);
   if(entered!==localStorage.getItem(PASS_KEY)){alert('Senha incorreta.');return;}
-  loadSavedConfig(); $('loginPanel').style.display='none'; $('settingsPanel').style.display='block';
+  await loadRemoteConfig(false); $('loginPanel').style.display='none'; $('settingsPanel').style.display='block';
 };
 $('saveConfigBtn').onclick=async()=>{
-  const cfg={apiKey:$('apiKey').value.trim(),fallbackRate:nval($('adminFallbackRate').value)||2.10};
-  localStorage.setItem(CONFIG_KEY,JSON.stringify(cfg));
-  $('fallbackRate').value=cfg.fallbackRate;
-  const np=$('newAdminPassword').value;
-  if(np){if(np.length<8){alert('Use uma senha com pelo menos 8 caracteres.');return;}localStorage.setItem(PASS_KEY,await hashText(np));$('newAdminPassword').value='';}
-  alert('Configurações salvas neste navegador.');
+  try{
+    await saveRemoteConfig();
+    const np=$('newAdminPassword').value;
+    if(np){
+      if(np.length<8){alert('Use uma senha com pelo menos 8 caracteres.');return;}
+      localStorage.setItem(PASS_KEY,await hashText(np));$('newAdminPassword').value='';
+    }
+    alert('Configurações salvas no Supabase.');
+  }catch(e){alert('Erro ao salvar no Supabase: '+e.message);}
 };
 
 
