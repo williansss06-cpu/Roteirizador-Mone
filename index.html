@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.1</title>
+<title>M'one | Roteirizador de Transporte V18.2</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -315,7 +315,7 @@ main{width:100%}
 
   <div class="fixed-origin"><b>Origem fixa:</b> Mundial Logistics — Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos/SP</div>
 <div id="rawSummary" class="command-summary">Carregue a planilha para visualizar a demanda.</div>
-<div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ. O sistema monta somente com as UFs marcadas e o Google otimiza a sequência rodoviária.</span></div>
+<div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b> <span class="mode-badge">ANTI-ZIG-ZAG ATIVO</span><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ. O sistema monta somente com as UFs marcadas e o Google otimiza a sequência rodoviária.</span></div>
   <input id="origin" type="hidden" value="Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil"/>
 
   <div id="settingsDrawer" class="settings-drawer">
@@ -363,7 +363,7 @@ main{width:100%}
     <h2>Mapa da rota selecionada</h2>
     <div id="map"></div>
     <div id="routeSummary" class="small" style="margin-top:8px">Clique em uma rota após o processamento.</div>
-    <div class="small" style="margin-top:6px"><b>Regra operacional:</b> a UF é identificada pelo CEP. As entregas são agrupadas por base + UF e aproximadas por CEP; depois o Google otimiza a sequência dentro de cada rota. Uma rota nunca mistura UFs.</div>
+    <div class="small" style="margin-top:6px"><b>Regra operacional:</b> a UF é identificada pelo CEP. As entregas são agrupadas por base + UF e aproximadas por CEP; depois o Google otimiza a sequência dentro de cada rota. No modo interestadual, a rota pode combinar somente as UFs autorizadas e deve manter o mesmo eixo/sentido.</div>
   </div>
 
   <div class="card" style="margin-top:12px">
@@ -627,7 +627,7 @@ async function calcRoute(row,idx){
     var previewRoute=straight.preview;
   }
   const res=previewRoute || await directions({
-    origin,destination,waypoints,optimizeWaypoints:$('optimize').checked,
+    origin,destination,waypoints,optimizeWaypoints:(route.lockSequence?false:$('optimize').checked),
     travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
   });
   const rt=res.routes[0]; let meters=0, seconds=0; rt.legs.forEach(l=>{meters+=l.distance.value;seconds+=l.duration.value});
@@ -758,20 +758,59 @@ function fullAddress(r){
 }
 
 function allowedUFs(){return [...document.querySelectorAll('#ufChecks input:checked')].map(x=>x.value);}
-function buildCorridorRoutes(rows,maxStops){
-  const groups={};
-  rows.forEach(r=>{const k='MUNDIAL_GUARULHOS';(groups[k]??=[]).push(r)});
-  const routes=[];let seq=1;
-  Object.values(groups).forEach(group=>{
-    /* Pré-agrupamento progressivo por corredor. Google Directions valida a sequência real por rodovia. */
-    group.sort((a,b)=>norm(a.city).localeCompare(norm(b.city))||Number(onlyDigits(a.cep))-Number(onlyDigits(b.cep)));
-    for(let i=0;i<group.length;i+=maxStops){
-      const chunk=group.slice(i,i+maxStops), cities=[...new Set(chunk.map(x=>x.city).filter(Boolean))], ufs=[...new Set(chunk.map(x=>x.uf).filter(Boolean))];
-      routes.push({route:`ROTA-${String(seq++).padStart(3,'0')}`,day:'',uf:ufs.join('+'),supplier:chunk[0].baseName||'',stores:chunk.length,vehicle:$('vehicleType').value,deliveries:chunk.length,cities:cities.join(' → '),origin:'Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil',stops:chunk.map(x=>fullAddress(x)),rawStops:chunk,corridor:ufs.join(' + ')});
-    }
-  });return routes;
-}
+function cepNum(r){return Number(onlyDigits(r.cep)||0);}
+function cityKey(r){return norm(r.city||'');}
 
+/* Corredores principais saindo de Guarulhos.
+   O objetivo aqui é impedir zig-zag: cada rota avança em um único eixo/sentido.
+   O Google calcula a malha rodoviária depois; ele não decide quais destinos pertencem ao corredor. */
+const AXIS_CITY = {
+  DUTRA_RJ:['GUARULHOS','ARUJA','SANTA ISABEL','JACAREI','SAO JOSE DOS CAMPOS','CACAPAVA','TAUBATE','PINDAMONHANGABA','APARECIDA','GUARATINGUETA','LORENA','CRUZEIRO','QUELUZ','RESENDE','BARRA MANSA','VOLTA REDONDA','RIO DE JANEIRO'],
+  ANHANGUERA_BANDEIRANTES:['CAJAMAR','JUNDIAI','LOUVEIRA','VINHEDO','VALINHOS','CAMPINAS','SUMARE','AMERICANA','LIMEIRA','RIO CLARO','PIRACICABA'],
+  CASTELO_BRANCO:['BARUERI','SANTANA DE PARNAIBA','ITU','SOROCABA','BOITUVA','TATUI'],
+  RAPOSO:['COTIA','VARGEM GRANDE PAULISTA','SAO ROQUE','SOROCABA','ITAPETININGA','PRESIDENTE PRUDENTE'],
+  DUTRA_SP:['SAO PAULO','GUARULHOS'],
+  FERNÃO_DIAS:['MAIRIPORA','ATIBAIA','BRAGANCA PAULISTA','POUSO ALEGRE','EXTREMA','CAMBUI','CAMANDUCAIA','BELO HORIZONTE'],
+  WASHINGTON_LUIS_MARECHAL:['JUNDIAI','CAMPINAS','LIMEIRA','RIO CLARO','SAO CARLOS','ARARAQUARA','MATAO','SAO JOSE DO RIO PRETO','MIRASSOL'],
+  CASTELO_MARECHAL_OESTE:['SOROCABA','BOITUVA','BOTUCATU','BAURU','LINS','BIRIGUI','ARACATUBA']
+};
+function axisInfo(r){
+  const c=cityKey(r);
+  for(const [axis,cities] of Object.entries(AXIS_CITY)){
+    const idx=cities.indexOf(c);
+    if(idx>=0)return {axis,rank:idx};
+  }
+  // Fallback: keep unknown destinations together only by UF + coarse CEP band.
+  const cep=cepNum(r), band=Math.floor(cep/100000);
+  return {axis:`OUTROS_${r.uf}_${band}`,rank:cep};
+}
+function buildCorridorRoutes(rows,maxStops){
+  const buckets={};
+  rows.forEach(r=>{
+    const a=axisInfo(r); r._axis=a.axis; r._rank=a.rank;
+    (buckets[a.axis]??=[]).push(r);
+  });
+  const routes=[]; let seq=1;
+  Object.entries(buckets).forEach(([axis,group])=>{
+    // Strictly progressive: near -> far on the same outbound axis.
+    group.sort((a,b)=>a._rank-b._rank || cepNum(a)-cepNum(b));
+    for(let i=0;i<group.length;i+=maxStops){
+      const chunk=group.slice(i,i+maxStops);
+      const cities=[];
+      chunk.forEach(x=>{if(x.city && !cities.includes(x.city))cities.push(x.city)});
+      const ufs=[...new Set(chunk.map(x=>x.uf).filter(Boolean))];
+      routes.push({
+        route:`ROTA-${String(seq++).padStart(3,'0')}`,day:'',uf:ufs.join('+'),
+        supplier:'Mundial Logistics',stores:chunk.length,vehicle:$('vehicleType').value,
+        deliveries:chunk.length,cities:cities.join(' → '),
+        origin:'Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil',
+        stops:chunk.map(x=>fullAddress(x)),rawStops:chunk,corridor:axis,
+        lockSequence:true
+      });
+    }
+  });
+  return routes;
+}
 function buildAutoRoutes(rows,maxStops){
   const groups={};
   rows.forEach(r=>{
