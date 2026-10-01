@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirização e Positivação V17</title>
+<title>M'one | Roteirização e Positivação V17.1</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -484,15 +484,18 @@ function closeAdmin(){ $('configModal').classList.remove('open'); $('apiKey').ty
 
 const nval=v=>{ if(typeof v==='number')return v; if(v==null)return NaN; let s=String(v).replace(/[R$\s]/g,''); if(s.includes(',')&&s.includes('.'))s=s.replace(/\./g,'').replace(',','.'); else s=s.replace(',','.'); return parseFloat(s); };
 function setStatus(t){$('status').textContent=t}
-function loadGoogle(){
+async function loadGoogle(){
+  if(window.google?.maps){googleReady=true;initMap();return;}
+  if(!$('apiKey').value.trim()) await loadRemoteConfig(false);
+  const key=$('apiKey').value.trim();
+  if(!key) throw new Error('Chave Google Maps não encontrada no Supabase. Abra ⚙ Parâmetros > Administrador.');
   return new Promise((resolve,reject)=>{
-    if(window.google?.maps){googleReady=true;initMap();return resolve();}
-    if(!$('apiKey').value.trim()) await loadRemoteConfig(false);
-    const key=$('apiKey').value.trim(); if(!key)return reject(new Error('Chave Google Maps não encontrada no Supabase. Abra ⚙ Parâmetros > Administrador.'));
     window.__gmcb=()=>{googleReady=true;initMap();resolve();}
     const s=document.createElement('script');
     s.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&callback=__gmcb&libraries=geometry`;
-    s.async=true;s.onerror=()=>reject(new Error('Não foi possível carregar o Google Maps.'));document.head.appendChild(s);
+    s.async=true;
+    s.onerror=()=>reject(new Error('Não foi possível carregar o Google Maps.'));
+    document.head.appendChild(s);
   });
 }
 function initMap(){
