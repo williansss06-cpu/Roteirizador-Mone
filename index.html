@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18</title>
+<title>M'one | Roteirizador de Transporte V18.1</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -269,6 +269,9 @@ main{width:100%}
 .command-main{grid-template-columns:minmax(210px,1.5fr) 85px 120px 110px 130px 155px 80px 145px 110px}
 .corridor-panel{margin-top:9px;padding:9px 11px;border:1px solid #f1d7c4;background:#fff8f2;border-radius:9px;font-size:10px}
 .uf-checks{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}.uf-chip{display:flex;align-items:center;gap:4px;background:#fff;border:1px solid #ddd;border-radius:16px;padding:4px 8px;font-weight:700}.uf-chip input{width:auto;height:auto;margin:0}
+
+.fixed-origin{margin-top:8px;padding:7px 10px;background:#f7f7f7;border:1px solid #e6e6e6;border-radius:8px;font-size:10.5px;color:#555}
+.fixed-origin b{color:#222}
 </style>
 
 </head>
@@ -310,9 +313,10 @@ main{width:100%}
     <button id="toggleSettings" class="cmd-settings" type="button">⚙ Parâmetros</button>
   </div>
 
-  <div id="rawSummary" class="command-summary">Carregue a planilha para visualizar a demanda.</div>
+  <div class="fixed-origin"><b>Origem fixa:</b> Mundial Logistics — Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos/SP</div>
+<div id="rawSummary" class="command-summary">Carregue a planilha para visualizar a demanda.</div>
 <div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ. O sistema monta somente com as UFs marcadas e o Google otimiza a sequência rodoviária.</span></div>
-  <input id="origin" type="hidden" value=""/>
+  <input id="origin" type="hidden" value="Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil"/>
 
   <div id="settingsDrawer" class="settings-drawer">
     <div class="settings-grid">
@@ -756,14 +760,14 @@ function fullAddress(r){
 function allowedUFs(){return [...document.querySelectorAll('#ufChecks input:checked')].map(x=>x.value);}
 function buildCorridorRoutes(rows,maxStops){
   const groups={};
-  rows.forEach(r=>{const k=`${norm(r.baseName)}|${norm(r.baseAddress)}`;(groups[k]??=[]).push(r)});
+  rows.forEach(r=>{const k='MUNDIAL_GUARULHOS';(groups[k]??=[]).push(r)});
   const routes=[];let seq=1;
   Object.values(groups).forEach(group=>{
     /* Pré-agrupamento progressivo por corredor. Google Directions valida a sequência real por rodovia. */
     group.sort((a,b)=>norm(a.city).localeCompare(norm(b.city))||Number(onlyDigits(a.cep))-Number(onlyDigits(b.cep)));
     for(let i=0;i<group.length;i+=maxStops){
       const chunk=group.slice(i,i+maxStops), cities=[...new Set(chunk.map(x=>x.city).filter(Boolean))], ufs=[...new Set(chunk.map(x=>x.uf).filter(Boolean))];
-      routes.push({route:`ROTA-${String(seq++).padStart(3,'0')}`,day:'',uf:ufs.join('+'),supplier:chunk[0].baseName||'',stores:chunk.length,vehicle:$('vehicleType').value,deliveries:chunk.length,cities:cities.join(' → '),origin:chunk[0].baseAddress,stops:chunk.map(x=>fullAddress(x)),rawStops:chunk,corridor:ufs.join(' + ')});
+      routes.push({route:`ROTA-${String(seq++).padStart(3,'0')}`,day:'',uf:ufs.join('+'),supplier:chunk[0].baseName||'',stores:chunk.length,vehicle:$('vehicleType').value,deliveries:chunk.length,cities:cities.join(' → '),origin:'Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil',stops:chunk.map(x=>fullAddress(x)),rawStops:chunk,corridor:ufs.join(' + ')});
     }
   });return routes;
 }
@@ -771,7 +775,7 @@ function buildCorridorRoutes(rows,maxStops){
 function buildAutoRoutes(rows,maxStops){
   const groups={};
   rows.forEach(r=>{
-    const key=`${norm(r.baseName)}|${norm(r.baseAddress)}|${r.uf}`;
+    const key=`MUNDIAL_GUARULHOS|${r.uf}`;
     (groups[key]??=[]).push(r);
   });
   const routes=[]; let seq=1;
@@ -786,7 +790,7 @@ function buildAutoRoutes(rows,maxStops){
         day:'', uf:chunk[0].uf, supplier:chunk[0].baseName||'',
         stores:chunk.length, vehicle:$('vehicleType').value, deliveries:chunk.length,
         cities:cities.join(' → '),
-        origin:chunk[0].baseAddress,
+        origin:'Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil',
         stops:chunk.map(x=>fullAddress(x)),
         rawStops:chunk
       });
@@ -824,10 +828,10 @@ $('loadBtn').onclick=async()=>{
         cep:cep,
         uf:uf,
         baseName:pick(r,['BASE DE RETIRADA','BASE RETIRADA']),
-        baseAddress:normalizeBaseAddress(pick(r,['ENDEREÇO DA BASE','ENDERECO DA BASE']))
+        baseAddress:'Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil'
       };
-    }).filter(r=>r.address&&r.city&&r.cep&&r.uf&&r.baseAddress);
-    if(!rawRows.length)throw new Error('Não encontrei linhas válidas com endereço, cidade, CEP e endereço da base.');
+    }).filter(r=>r.address&&r.city&&r.cep&&r.uf);
+    if(!rawRows.length)throw new Error('Não encontrei linhas válidas com endereço, cidade, CEP e UF.');
     const ufs=[...new Set(rawRows.map(r=>r.uf))].sort();
     $('ufFilter').innerHTML='<option value="TODAS">Todas as UFs (separadas)</option>'+ufs.map(u=>`<option value="${u}">${u}</option>`).join('');
     $('ufChecks').innerHTML=ufs.map(u=>`<label class="uf-chip"><input type="checkbox" value="${u}"> ${u}</label>`).join('');
