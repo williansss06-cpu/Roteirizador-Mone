@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.2</title>
+<title>M'one | Roteirizador de Transporte V18.3</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -627,7 +627,7 @@ async function calcRoute(row,idx){
     var previewRoute=straight.preview;
   }
   const res=previewRoute || await directions({
-    origin,destination,waypoints,optimizeWaypoints:(route.lockSequence?false:$('optimize').checked),
+    origin,destination,waypoints,optimizeWaypoints:(row.lockSequence?false:$('optimize').checked),
     travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
   });
   const rt=res.routes[0]; let meters=0, seconds=0; rt.legs.forEach(l=>{meters+=l.distance.value;seconds+=l.duration.value});
@@ -647,7 +647,7 @@ async function calcRoute(row,idx){
   const tableValue=tariff ? tariff.value : (km*rr.rate);
   const freightCost=(tableValue+toll)*(1+margin);
   const extraPos=Math.max(0,deliveries-3);
-  const serviceCost=150+(extraPos*20);
+  const serviceCost=$('operationMode').value==='FRETE_SERVICO' ? 150+(extraPos*20) : 0;
   const cost=freightCost+serviceCost;
   const effectiveRate=km>0?tableValue/km:0;
   const pricingMode=tariff?'TABELA MONE':'HISTÓRICO/FALLBACK';
@@ -694,12 +694,12 @@ window.changeVehicle=(i,v)=>{
   r.rate=r.km>0?tableValue/r.km:0; r.costBase=tariff?tariff.base:rr.base; r.sampleN=rr.n||0;
   r.confidence=tariff?'TABELA FIXA':(rr.confidence||''); r.pricingMode=tariff?'TABELA MONE':'HISTÓRICO/FALLBACK';
   r.tableFixed=tariff?.fixed||0; r.excessKm=tariff?.excessKm||0; r.excessRate=tariff?.excessRate||0;
-  r.historicalRate=rr.rate; r.freightCost=(tableValue+toll)*(1+margin); r.extraPos=Math.max(0,(r.deliveries||1)-3); r.serviceCost=150+r.extraPos*20; r.cost=r.freightCost+r.serviceCost; r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
+  r.historicalRate=rr.rate; r.freightCost=(tableValue+toll)*(1+margin); r.extraPos=Math.max(0,(r.deliveries||1)-3); r.serviceCost=$('operationMode').value==='FRETE_SERVICO' ? 150+r.extraPos*20 : 0; r.cost=r.freightCost+r.serviceCost; r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
   render();
 };
 window.changeDeliveries=(i,q)=>{
   const r=results[i]; if(!r)return;
-  r.deliveries=Math.max(1,Number(q)||1); r.extraPos=Math.max(0,r.deliveries-3); r.serviceCost=150+r.extraPos*20; r.cost=(r.freightCost||0)+r.serviceCost; r.costPerDelivery=r.cost/r.deliveries; render();
+  r.deliveries=Math.max(1,Number(q)||1); r.extraPos=Math.max(0,r.deliveries-3); r.serviceCost=$('operationMode').value==='FRETE_SERVICO' ? 150+r.extraPos*20 : 0; r.cost=(r.freightCost||0)+r.serviceCost; r.costPerDelivery=r.cost/r.deliveries; render();
 };
 window.showRoute=i=>{
   const r=results[i]; if(!r?.directions)return; directionsRenderer.setDirections(r.directions);
@@ -896,7 +896,7 @@ $('calcBtn').onclick=async()=>{
       try{results.push(await calcRoute(routeRows[i],i));}
       catch(e){
         const msg=String(e.message||e);
-        results.push({...routeRows[i],idx:i,status:'ERRO: '+msg,km:0,rate:0,cost:0,sequence:''});
+        results.push({...routeRows[i],idx:i,status:'ERRO: '+msg,km:0,rate:0,freightCost:0,serviceCost:0,cost:0,sequence:'ERRO DE PERCURSO — '+msg});
       }
       render();
       await new Promise(r=>setTimeout(r,180));
