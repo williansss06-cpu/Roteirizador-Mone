@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.8</title>
+<title>M'one | Roteirizador de Transporte V18.9</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -427,9 +427,11 @@ function tariffFor(km,uf,vehicle){
   const excessRate=t.excessByUF[norm(uf)];
   if(!Number.isFinite(excessRate)) return null;
   const excessKm=Math.max(0,km-t.baseKm);
-  const value=t.fixed + excessKm*excessRate;
-  return {value,fixed:t.fixed,baseKm:t.baseKm,excessKm,excessRate,
-    base:`Até ${t.baseKm} km: R$ ${t.fixed.toFixed(2)} | Excedente: ${excessKm.toFixed(1)} km × R$ ${excessRate.toFixed(2)}/km (${norm(uf)}) | Total tabela: R$ ${value.toFixed(2)}`};
+  const freightOnly=$('operationMode')?.value==='FRETE';
+  const fixed=(norm(vehicle)==='FIORINO' && freightOnly) ? 320.00 : t.fixed;
+  const value=fixed + excessKm*excessRate;
+  return {value,fixed,baseKm:t.baseKm,excessKm,excessRate,
+    base:`Até ${t.baseKm} km: R$ ${fixed.toFixed(2)} | Excedente: ${excessKm.toFixed(1)} km × R$ ${excessRate.toFixed(2)}/km (${norm(uf)}) | Total tabela: R$ ${value.toFixed(2)}`};
 }
 const $=id=>document.getElementById(id);
 const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(n||0);
@@ -650,7 +652,7 @@ async function calcRoute(row,idx){
   const serviceCost=$('operationMode').value==='FRETE_SERVICO' ? 150+(extraPos*20) : 0;
   const cost=freightCost+serviceCost;
   const effectiveRate=km>0?tableValue/km:0;
-  const pricingMode=tariff?'TABELA MONE':'HISTÓRICO/FALLBACK';
+  const pricingMode=tariff?($('operationMode').value==='FRETE'?'TABELA FRETE':'TABELA MONE'):'HISTÓRICO/FALLBACK';
   const costBase=tariff?tariff.base:rr.base;
   return {...row,vehicle,deliveries,idx,km,seconds,rate:effectiveRate,freightCost,serviceCost,extraPos,cost,costPerDelivery:cost/deliveries,costBase,
     pricingMode,tableFixed:tariff?.fixed||0,tableBaseKm:tariff?.baseKm||0,excessKm:tariff?.excessKm||0,excessRate:tariff?.excessRate||0,
@@ -692,7 +694,7 @@ window.changeVehicle=(i,v)=>{
   const rr=rateFor(r.km,r.uf,v), tariff=tariffFor(r.km,r.uf,v), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
   const tableValue=tariff?tariff.value:(r.km*rr.rate);
   r.rate=r.km>0?tableValue/r.km:0; r.costBase=tariff?tariff.base:rr.base; r.sampleN=rr.n||0;
-  r.confidence=tariff?'TABELA FIXA':(rr.confidence||''); r.pricingMode=tariff?'TABELA MONE':'HISTÓRICO/FALLBACK';
+  r.confidence=tariff?'TABELA FIXA':(rr.confidence||''); r.pricingMode=tariff?($('operationMode').value==='FRETE'?'TABELA FRETE':'TABELA MONE'):'HISTÓRICO/FALLBACK';
   r.tableFixed=tariff?.fixed||0; r.excessKm=tariff?.excessKm||0; r.excessRate=tariff?.excessRate||0;
   r.historicalRate=rr.rate; r.freightCost=(tableValue+toll)*(1+margin); r.extraPos=Math.max(0,(r.deliveries||1)-3); r.serviceCost=$('operationMode').value==='FRETE_SERVICO' ? 150+r.extraPos*20 : 0; r.cost=r.freightCost+r.serviceCost; r.costPerDelivery=r.cost/Math.max(1,r.deliveries||1);
   render();
