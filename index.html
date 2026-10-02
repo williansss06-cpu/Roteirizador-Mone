@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.12</title>
+<title>M'one | Roteirizador de Transporte V18.14</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -274,6 +274,9 @@ main{width:100%}
 .fixed-origin b{color:#222}
 
 body.freight-only .cost-pos-col{display:none!important;}
+
+/* Gestão de usuários */
+.user-toolbar{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:12px}.user-toolbar>div{min-width:160px;flex:1}.user-actions{display:flex;gap:6px}.user-actions button{width:auto;margin:0;padding:6px 10px;min-height:30px}.badge-active{color:#137a45;font-weight:800}.badge-inactive{color:#b33;font-weight:800}.users-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.users-grid .full{grid-column:1/-1}.perm-box{display:flex;gap:14px;flex-wrap:wrap;padding:10px;border:1px solid var(--line);border-radius:8px}.perm-box label{margin:0;font-weight:600}.perm-box input{width:auto;margin-right:5px}@media(max-width:700px){.users-grid{grid-template-columns:1fr}}
 </style>
 
 <script>
@@ -349,6 +352,7 @@ window.MONE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zbJy5pW_liLqoN2h7nXb4Q_po
         Serviço: R$ 150,00 até 3 positivações + R$ 20,00 por excedente.
       </div>
       <button class="secondary admin-btn" id="openConfigBtn">⚙ Administrador</button>
+      <button class="secondary" id="openUsersBtn" type="button">👥 Usuários</button>
       <button id="exportBtn" class="secondary" disabled>Exportar Excel</button>
     </div>
   </div>
@@ -413,6 +417,25 @@ window.MONE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zbJy5pW_liLqoN2h7nXb4Q_po
       <button class="secondary" id="lockConfigBtn">Fechar e bloquear</button>
       <div class="lockmsg">A URL e a anon key ficam no navegador para permitir a conexão. A configuração operacional fica centralizada no Supabase. Restrinja a chave Google Maps por domínio no Google Cloud.</div>
     </div>
+  </div>
+</div>
+
+
+<div id="usersModal" class="modal">
+  <div class="modalbox" style="max-width:980px">
+    <h2>Gestão de usuários</h2>
+    <div class="status">Cadastre os usuários operacionais do M'one. Os registros são gravados na tabela <b>mone_usuarios</b> do Supabase.</div>
+    <input id="userId" type="hidden"/>
+    <div class="users-grid">
+      <div><label>Nome completo</label><input id="userName" type="text" placeholder="Nome do usuário"/></div>
+      <div><label>E-mail</label><input id="userEmail" type="email" placeholder="usuario@empresa.com.br"/></div>
+      <div><label>Perfil</label><select id="userProfile"><option value="USUARIO">Usuário</option><option value="GESTOR">Gestor</option><option value="ADMINISTRADOR">Administrador</option></select></div>
+      <div><label>Status</label><select id="userStatus"><option value="ATIVO">Ativo</option><option value="INATIVO">Inativo</option></select></div>
+      <div class="full"><label>Permissões</label><div class="perm-box"><label><input id="permProcess" type="checkbox" checked/>Processar rotas</label><label><input id="permExport" type="checkbox"/>Exportar</label><label><input id="permParams" type="checkbox"/>Parâmetros</label><label><input id="permUsers" type="checkbox"/>Usuários</label></div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button id="saveUserBtn">Salvar usuário</button><button class="secondary" id="clearUserBtn">Novo</button><button class="secondary" id="closeUsersBtn">Fechar</button></div>
+    <div id="usersStatus" class="lockmsg" style="margin-top:8px"></div>
+    <div class="tablewrap" style="margin-top:12px;max-height:330px"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th><th>Permissões</th><th>Ações</th></tr></thead><tbody id="usersTbody"></tbody></table></div>
   </div>
 </div>
 
@@ -1064,6 +1087,6 @@ document.addEventListener('DOMContentLoaded',async()=>{
     await loadRemoteConfig(false);
   }catch(e){console.warn('Configuração central Supabase:',e);}
 });
-</script>
+\n// ===== Gestão de usuários Supabase =====\nfunction escHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}\nfunction userPermissions(){return {processar:$('permProcess').checked,exportar:$('permExport').checked,parametros:$('permParams').checked,usuarios:$('permUsers').checked};}\nfunction clearUserForm(){ $('userId').value=''; $('userName').value=''; $('userEmail').value=''; $('userProfile').value='USUARIO'; $('userStatus').value='ATIVO'; $('permProcess').checked=true; $('permExport').checked=false; $('permParams').checked=false; $('permUsers').checked=false; $('usersStatus').textContent=''; }\nasync function loadUsers(){\n  const client=getSupabaseClient(); if(!client){$('usersStatus').textContent='Supabase não configurado.';return;}\n  $('usersStatus').textContent='Carregando usuários...';\n  const {data,error}=await client.from('mone_usuarios').select('*').order('nome',{ascending:true});\n  if(error){$('usersStatus').innerHTML='Erro: '+escHtml(error.message)+' — execute o SQL de criação da tabela mone_usuarios no Supabase.';return;}\n  $('usersStatus').textContent=data.length+' usuário(s) cadastrado(s).';\n  $('usersTbody').innerHTML=data.map(u=>{const p=u.permissoes||{}; const perms=Object.entries(p).filter(x=>x[1]).map(x=>x[0]).join(', ')||'—'; return `<tr><td>${escHtml(u.nome)}</td><td>${escHtml(u.email)}</td><td>${escHtml(u.perfil)}</td><td class="${u.status==='ATIVO'?'badge-active':'badge-inactive'}">${escHtml(u.status)}</td><td>${escHtml(perms)}</td><td><div class="user-actions"><button type="button" onclick='editUser(${JSON.stringify(JSON.stringify(u))})'>Editar</button><button type="button" class="secondary" onclick="toggleUser('${u.id}','${u.status}')">${u.status==='ATIVO'?'Desativar':'Ativar'}</button></div></td></tr>`}).join('');\n}\nfunction editUser(raw){const u=JSON.parse(raw); $('userId').value=u.id; $('userName').value=u.nome||''; $('userEmail').value=u.email||''; $('userProfile').value=u.perfil||'USUARIO'; $('userStatus').value=u.status||'ATIVO'; const p=u.permissoes||{}; $('permProcess').checked=!!p.processar; $('permExport').checked=!!p.exportar; $('permParams').checked=!!p.parametros; $('permUsers').checked=!!p.usuarios; window.scrollTo({top:0,behavior:'smooth'});}\nasync function saveUser(){\n  const client=getSupabaseClient(); if(!client){$('usersStatus').textContent='Supabase não configurado.';return;}\n  const nome=$('userName').value.trim(), email=$('userEmail').value.trim().toLowerCase(); if(!nome||!email){$('usersStatus').textContent='Informe nome e e-mail.';return;}\n  const row={nome,email,perfil:$('userProfile').value,status:$('userStatus').value,permissoes:userPermissions(),updated_at:new Date().toISOString()}; const id=$('userId').value;\n  $('usersStatus').textContent='Salvando...'; let q=id?client.from('mone_usuarios').update(row).eq('id',id):client.from('mone_usuarios').insert(row); const {error}=await q;\n  if(error){$('usersStatus').textContent='Erro ao salvar: '+error.message;return;} clearUserForm(); await loadUsers(); $('usersStatus').textContent='Usuário salvo no Supabase com sucesso.';\n}\nasync function toggleUser(id,status){const client=getSupabaseClient(); if(!client)return; const {error}=await client.from('mone_usuarios').update({status:status==='ATIVO'?'INATIVO':'ATIVO',updated_at:new Date().toISOString()}).eq('id',id); if(error){$('usersStatus').textContent='Erro: '+error.message;return;} await loadUsers();}\nwindow.editUser=editUser; window.toggleUser=toggleUser;\ndocument.addEventListener('DOMContentLoaded',()=>{\n  $('openUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.add('show');loadUsers();});\n  $('closeUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.remove('show');});\n  $('saveUserBtn')?.addEventListener('click',saveUser); $('clearUserBtn')?.addEventListener('click',clearUserForm);\n});\n</script>
 </body>
 </html>
