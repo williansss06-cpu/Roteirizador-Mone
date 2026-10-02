@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.9</title>
+<title>M'one | Roteirizador de Transporte V18.11</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -272,8 +272,14 @@ main{width:100%}
 
 .fixed-origin{margin-top:8px;padding:7px 10px;background:#f7f7f7;border:1px solid #e6e6e6;border-radius:8px;font-size:10.5px;color:#555}
 .fixed-origin b{color:#222}
+
+body.freight-only .cost-pos-col{display:none!important;}
 </style>
 
+<script>
+window.MONE_SUPABASE_URL = 'https://kkworccmymfhumgeutno.supabase.co';
+window.MONE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zbJy5pW_liLqoN2h7nXb4Q_pofgu9nH';
+</script>
 </head>
 <body>
 <header>
@@ -370,7 +376,7 @@ main{width:100%}
     <h2>Rotas processadas</h2>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Rota</th><th>Base</th><th>UF</th><th>Veículo</th><th>Positivações</th><th>PDVs</th><th>Sequência por cidade</th><th>KM total</th><th>Fixo até 100 km</th><th>KM excedente</th><th>R$/km excedente</th><th>Frete</th><th>Serviço</th><th>Custo Total</th><th>Custo/positivação</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Rota</th><th>Base</th><th>UF</th><th>Veículo</th><th>Positivações</th><th>PDVs</th><th>Sequência por cidade</th><th>KM total</th><th>Fixo até 100 km</th><th>KM excedente</th><th>R$/km excedente</th><th>Frete</th><th>Serviço</th><th>Custo Total</th><th class="cost-pos-col">Custo/positivação</th><th>Precificação</th><th>Confiança</th><th>Base custo</th><th>Status</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>
@@ -450,7 +456,9 @@ async function ensureDefaultPass(){
   if(!localStorage.getItem(PASS_KEY)) localStorage.setItem(PASS_KEY,await hashText('Mundial@2026'));
 }
 function getConnection(){
-  try{return JSON.parse(localStorage.getItem(CONNECTION_KEY)||'{}')}catch(e){return {}}
+  const central={url:window.MONE_SUPABASE_URL||'',anon:window.MONE_SUPABASE_PUBLISHABLE_KEY||''};
+  if(central.url&&central.anon)return central;
+  try{return JSON.parse(localStorage.getItem(CONNECTION_KEY)||'null')}catch{return null}
 }
 function connectSupabase(url,key){
   if(!url||!key||!window.supabase)return null;
@@ -991,6 +999,38 @@ document.addEventListener('DOMContentLoaded',function(){
  document.getElementById('operationMode')?.addEventListener('change',updatePricingRuleCard);
  document.getElementById('vehicleType')?.addEventListener('change',updatePricingRuleCard);
  updatePricingRuleCard();
+});
+</script>
+
+<script>
+function syncFreightOnlyColumns(){
+  const freightOnly=document.getElementById('operationMode')?.value==='FRETE';
+  document.body.classList.toggle('freight-only',freightOnly);
+  document.querySelectorAll('table').forEach(table=>{
+    const heads=[...table.querySelectorAll('thead th')];
+    const idx=heads.findIndex(th=>th.textContent.trim().toLowerCase().includes('custo/positiv'));
+    if(idx>=0){
+      heads[idx].classList.add('cost-pos-col');
+      table.querySelectorAll('tbody tr').forEach(tr=>{
+        if(tr.children[idx])tr.children[idx].classList.add('cost-pos-col');
+      });
+    }
+  });
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('operationMode')?.addEventListener('change',()=>setTimeout(syncFreightOnlyColumns,0));
+  const obs=new MutationObserver(()=>syncFreightOnlyColumns());
+  document.querySelectorAll('tbody').forEach(t=>obs.observe(t,{childList:true,subtree:true}));
+  syncFreightOnlyColumns();
+});
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded',async()=>{
+  try{
+    initSupabase();
+    await loadRemoteConfig(false);
+  }catch(e){console.warn('Configuração central Supabase:',e);}
 });
 </script>
 </body>
