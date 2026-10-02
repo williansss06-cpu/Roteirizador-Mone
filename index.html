@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.11</title>
+<title>M'one | Roteirizador de Transporte V18.12</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -456,8 +456,8 @@ async function ensureDefaultPass(){
   if(!localStorage.getItem(PASS_KEY)) localStorage.setItem(PASS_KEY,await hashText('Mundial@2026'));
 }
 function getConnection(){
-  const central={url:window.MONE_SUPABASE_URL||'',anon:window.MONE_SUPABASE_PUBLISHABLE_KEY||''};
-  if(central.url&&central.anon)return central;
+  const central={url:window.MONE_SUPABASE_URL||'',anonKey:window.MONE_SUPABASE_PUBLISHABLE_KEY||''};
+  if(central.url&&central.anonKey)return central;
   try{return JSON.parse(localStorage.getItem(CONNECTION_KEY)||'null')}catch{return null}
 }
 function connectSupabase(url,key){
@@ -469,12 +469,12 @@ async function loadRemoteConfig(showError=false){
   const c=getConnection();
   if(c.url) $('supabaseUrl').value=c.url;
   if(c.anonKey) $('supabaseAnonKey').value=c.anonKey;
-  if(!c.url||!c.anonKey)return false;
+  if(!c.url||!c.anonKey){if(showError)setStatus('Conexão Supabase não inicializada.');return false;}
   try{
     connectSupabase(c.url,c.anonKey);
     const {data,error}=await sb.from('mone_configuracoes').select('*').eq('id',1).single();
     if(error)throw error;
-    if(data?.google_maps_api_key)$('apiKey').value=data.google_maps_api_key;
+    if(data?.google_maps_api_key){$('apiKey').value=data.google_maps_api_key; setStatus('Supabase conectado • Google Maps Key sincronizada.');}
     if(Number.isFinite(Number(data?.fallback_rate))){
       $('fallbackRate').value=Number(data.fallback_rate);
       $('adminFallbackRate').value=Number(data.fallback_rate);
