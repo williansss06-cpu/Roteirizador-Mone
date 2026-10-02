@@ -321,7 +321,7 @@ window.MONE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zbJy5pW_liLqoN2h7nXb4Q_po
 
   <div class="fixed-origin"><b>Origem fixa:</b> Mundial Logistics — Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos/SP</div>
 <div id="rawSummary" class="command-summary">Carregue a planilha para visualizar a demanda.</div>
-<div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b> <span class="mode-badge">ANTI-ZIG-ZAG ATIVO</span><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ ou PR + SC + RS. As UFs marcadas podem compartilhar a MESMA rota quando pertencem ao mesmo eixo rodoviário; o anti-zig-zag mantém o sentido de avanço.</span></div>
+<div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b> <span class="mode-badge">ANTI-ZIG-ZAG UF + CIDADE ATIVO</span><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ ou PR + SC + RS. As UFs marcadas podem compartilhar a MESMA rota quando pertencem ao mesmo eixo rodoviário; o anti-zig-zag mantém o sentido de avanço.</span></div>
   <input id="origin" type="hidden" value="Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil"/>
 
   <div id="settingsDrawer" class="settings-drawer">
@@ -636,11 +636,11 @@ async function calcRoute(row,idx){
     destination=straight.destination; waypoints=straight.waypoints;
     var previewRoute=straight.preview;
   }
-  const res=previewRoute || await directions({
+  let res=previewRoute || await directions({
     origin,destination,waypoints,optimizeWaypoints:(row.lockSequence?false:$('optimize').checked),
     travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
   });
-  const rt=res.routes[0]; let meters=0, seconds=0; rt.legs.forEach(l=>{meters+=l.distance.value;seconds+=l.duration.value});
+  let rt=res.routes[0];
   let orderedStops;
   if(returnToOrigin){
     const order=rt.waypoint_order||waypoints.map((_,i)=>i);
@@ -650,6 +650,38 @@ async function calcRoute(row,idx){
     const order=rt.waypoint_order||waypoints.map((_,i)=>i);
     orderedStops=order.map(i=>mids[i]).concat(destination);
   }
+
+  // ANTI-ZIG-ZAG POR CIDADE:
+  // usa a primeira ocorrência de cada cidade para definir a ordem dos blocos e
+  // mantém todos os PDVs dessa cidade juntos. Depois recalcula o percurso no
+  // Google com a sequência travada, portanto o KM exibido é o KM da rota corrigida.
+  const cityOrder=[];
+  const cityBlocks=new Map();
+  orderedStops.forEach(stop=>{
+    const key=norm(cityFromFullAddress(stop));
+    if(!cityBlocks.has(key)){ cityBlocks.set(key,[]); cityOrder.push(key); }
+    cityBlocks.get(key).push(stop);
+  });
+  const blockedStops=cityOrder.flatMap(key=>cityBlocks.get(key));
+  const changed=blockedStops.some((stop,i)=>stop!==orderedStops[i]);
+  if(changed && blockedStops.length>1){
+    orderedStops=blockedStops;
+    if(returnToOrigin){
+      destination=origin;
+      waypoints=orderedStops.map(x=>({location:x,stopover:true}));
+    } else {
+      destination=orderedStops[orderedStops.length-1];
+      waypoints=orderedStops.slice(0,-1).map(x=>({location:x,stopover:true}));
+    }
+    res=await directions({
+      origin,destination,waypoints,optimizeWaypoints:false,
+      travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
+    });
+    rt=res.routes[0];
+  }
+
+  let meters=0, seconds=0;
+  rt.legs.forEach(l=>{meters+=l.distance.value;seconds+=l.duration.value});
   const km=Math.round((meters/1000)*10)/10;
   const vehicle=row.vehicle || $('vehicleType').value;
   const deliveries=Math.max(1, Number(row.deliveries || $('deliveryQty').value || stops.length || 1));
