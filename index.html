@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.14</title>
+<title>M'one | Roteirizador de Transporte V18.16</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -1087,6 +1087,34 @@ document.addEventListener('DOMContentLoaded',async()=>{
     await loadRemoteConfig(false);
   }catch(e){console.warn('Configuração central Supabase:',e);}
 });
-\n// ===== Gestão de usuários Supabase =====\nfunction escHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}\nfunction userPermissions(){return {processar:$('permProcess').checked,exportar:$('permExport').checked,parametros:$('permParams').checked,usuarios:$('permUsers').checked};}\nfunction clearUserForm(){ $('userId').value=''; $('userName').value=''; $('userEmail').value=''; $('userProfile').value='USUARIO'; $('userStatus').value='ATIVO'; $('permProcess').checked=true; $('permExport').checked=false; $('permParams').checked=false; $('permUsers').checked=false; $('usersStatus').textContent=''; }\nasync function loadUsers(){\n  const client=getSupabaseClient(); if(!client){$('usersStatus').textContent='Supabase não configurado.';return;}\n  $('usersStatus').textContent='Carregando usuários...';\n  const {data,error}=await client.from('mone_usuarios').select('*').order('nome',{ascending:true});\n  if(error){$('usersStatus').innerHTML='Erro: '+escHtml(error.message)+' — execute o SQL de criação da tabela mone_usuarios no Supabase.';return;}\n  $('usersStatus').textContent=data.length+' usuário(s) cadastrado(s).';\n  $('usersTbody').innerHTML=data.map(u=>{const p=u.permissoes||{}; const perms=Object.entries(p).filter(x=>x[1]).map(x=>x[0]).join(', ')||'—'; return `<tr><td>${escHtml(u.nome)}</td><td>${escHtml(u.email)}</td><td>${escHtml(u.perfil)}</td><td class="${u.status==='ATIVO'?'badge-active':'badge-inactive'}">${escHtml(u.status)}</td><td>${escHtml(perms)}</td><td><div class="user-actions"><button type="button" onclick='editUser(${JSON.stringify(JSON.stringify(u))})'>Editar</button><button type="button" class="secondary" onclick="toggleUser('${u.id}','${u.status}')">${u.status==='ATIVO'?'Desativar':'Ativar'}</button></div></td></tr>`}).join('');\n}\nfunction editUser(raw){const u=JSON.parse(raw); $('userId').value=u.id; $('userName').value=u.nome||''; $('userEmail').value=u.email||''; $('userProfile').value=u.perfil||'USUARIO'; $('userStatus').value=u.status||'ATIVO'; const p=u.permissoes||{}; $('permProcess').checked=!!p.processar; $('permExport').checked=!!p.exportar; $('permParams').checked=!!p.parametros; $('permUsers').checked=!!p.usuarios; window.scrollTo({top:0,behavior:'smooth'});}\nasync function saveUser(){\n  const client=getSupabaseClient(); if(!client){$('usersStatus').textContent='Supabase não configurado.';return;}\n  const nome=$('userName').value.trim(), email=$('userEmail').value.trim().toLowerCase(); if(!nome||!email){$('usersStatus').textContent='Informe nome e e-mail.';return;}\n  const row={nome,email,perfil:$('userProfile').value,status:$('userStatus').value,permissoes:userPermissions(),updated_at:new Date().toISOString()}; const id=$('userId').value;\n  $('usersStatus').textContent='Salvando...'; let q=id?client.from('mone_usuarios').update(row).eq('id',id):client.from('mone_usuarios').insert(row); const {error}=await q;\n  if(error){$('usersStatus').textContent='Erro ao salvar: '+error.message;return;} clearUserForm(); await loadUsers(); $('usersStatus').textContent='Usuário salvo no Supabase com sucesso.';\n}\nasync function toggleUser(id,status){const client=getSupabaseClient(); if(!client)return; const {error}=await client.from('mone_usuarios').update({status:status==='ATIVO'?'INATIVO':'ATIVO',updated_at:new Date().toISOString()}).eq('id',id); if(error){$('usersStatus').textContent='Erro: '+error.message;return;} await loadUsers();}\nwindow.editUser=editUser; window.toggleUser=toggleUser;\ndocument.addEventListener('DOMContentLoaded',()=>{\n  $('openUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.add('show');loadUsers();});\n  $('closeUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.remove('show');});\n  $('saveUserBtn')?.addEventListener('click',saveUser); $('clearUserBtn')?.addEventListener('click',clearUserForm);\n});\n</script>
+
+// ===== Gestão de usuários Supabase =====
+function escHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function userPermissions(){return {processar:$('permProcess').checked,exportar:$('permExport').checked,parametros:$('permParams').checked,usuarios:$('permUsers').checked};}
+function clearUserForm(){ $('userId').value=''; $('userName').value=''; $('userEmail').value=''; $('userProfile').value='USUARIO'; $('userStatus').value='ATIVO'; $('permProcess').checked=true; $('permExport').checked=false; $('permParams').checked=false; $('permUsers').checked=false; $('usersStatus').textContent=''; }
+async function loadUsers(){
+  const client=getSupabaseClient(); if(!client){$('usersStatus').textContent='Supabase não configurado.';return;}
+  $('usersStatus').textContent='Carregando usuários...';
+  const {data,error}=await client.from('mone_usuarios').select('*').order('nome',{ascending:true});
+  if(error){$('usersStatus').innerHTML='Erro: '+escHtml(error.message)+' — execute o SQL de criação da tabela mone_usuarios no Supabase.';return;}
+  $('usersStatus').textContent=data.length+' usuário(s) cadastrado(s).';
+  $('usersTbody').innerHTML=data.map(u=>{const p=u.permissoes||{}; const perms=Object.entries(p).filter(x=>x[1]).map(x=>x[0]).join(', ')||'—'; return `<tr><td>${escHtml(u.nome)}</td><td>${escHtml(u.email)}</td><td>${escHtml(u.perfil)}</td><td class="${u.status==='ATIVO'?'badge-active':'badge-inactive'}">${escHtml(u.status)}</td><td>${escHtml(perms)}</td><td><div class="user-actions"><button type="button" onclick='editUser(${JSON.stringify(JSON.stringify(u))})'>Editar</button><button type="button" class="secondary" onclick="toggleUser('${u.id}','${u.status}')">${u.status==='ATIVO'?'Desativar':'Ativar'}</button></div></td></tr>`}).join('');
+}
+function editUser(raw){const u=JSON.parse(raw); $('userId').value=u.id; $('userName').value=u.nome||''; $('userEmail').value=u.email||''; $('userProfile').value=u.perfil||'USUARIO'; $('userStatus').value=u.status||'ATIVO'; const p=u.permissoes||{}; $('permProcess').checked=!!p.processar; $('permExport').checked=!!p.exportar; $('permParams').checked=!!p.parametros; $('permUsers').checked=!!p.usuarios; window.scrollTo({top:0,behavior:'smooth'});}
+async function saveUser(){
+  const client=getSupabaseClient(); if(!client){$('usersStatus').textContent='Supabase não configurado.';return;}
+  const nome=$('userName').value.trim(), email=$('userEmail').value.trim().toLowerCase(); if(!nome||!email){$('usersStatus').textContent='Informe nome e e-mail.';return;}
+  const row={nome,email,perfil:$('userProfile').value,status:$('userStatus').value,permissoes:userPermissions(),updated_at:new Date().toISOString()}; const id=$('userId').value;
+  $('usersStatus').textContent='Salvando...'; let q=id?client.from('mone_usuarios').update(row).eq('id',id):client.from('mone_usuarios').insert(row); const {error}=await q;
+  if(error){$('usersStatus').textContent='Erro ao salvar: '+error.message;return;} clearUserForm(); await loadUsers(); $('usersStatus').textContent='Usuário salvo no Supabase com sucesso.';
+}
+async function toggleUser(id,status){const client=getSupabaseClient(); if(!client)return; const {error}=await client.from('mone_usuarios').update({status:status==='ATIVO'?'INATIVO':'ATIVO',updated_at:new Date().toISOString()}).eq('id',id); if(error){$('usersStatus').textContent='Erro: '+error.message;return;} await loadUsers();}
+window.editUser=editUser; window.toggleUser=toggleUser;
+document.addEventListener('DOMContentLoaded',()=>{
+  $('openUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.add('show');loadUsers();});
+  $('closeUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.remove('show');});
+  $('saveUserBtn')?.addEventListener('click',saveUser); $('clearUserBtn')?.addEventListener('click',clearUserForm);
+});
+</script>
 </body>
 </html>
