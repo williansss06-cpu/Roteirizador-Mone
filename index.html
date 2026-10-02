@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.5</title>
+<title>M'one | Roteirizador de Transporte V18.6</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -315,7 +315,7 @@ main{width:100%}
 
   <div class="fixed-origin"><b>Origem fixa:</b> Mundial Logistics — Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos/SP</div>
 <div id="rawSummary" class="command-summary">Carregue a planilha para visualizar a demanda.</div>
-<div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b> <span class="mode-badge">ANTI-ZIG-ZAG ATIVO</span><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ. O sistema monta somente com as UFs marcadas e o Google otimiza a sequência rodoviária.</span></div>
+<div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b> <span class="mode-badge">ANTI-ZIG-ZAG ATIVO</span><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ ou PR + SC + RS. As UFs marcadas podem compartilhar a MESMA rota quando pertencem ao mesmo eixo rodoviário; o anti-zig-zag mantém o sentido de avanço.</span></div>
   <input id="origin" type="hidden" value="Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil"/>
 
   <div id="settingsDrawer" class="settings-drawer">
@@ -774,15 +774,44 @@ const AXIS_CITY = {
   WASHINGTON_LUIS_MARECHAL:['JUNDIAI','CAMPINAS','SUMARE','HORTOLANDIA','PAULINIA','AMERICANA','SANTA BARBARA D OESTE','LIMEIRA','RIO CLARO','SAO CARLOS','ARARAQUARA','MATAO','CATANDUVA','SAO JOSE DO RIO PRETO','MIRASSOL','OLIMPIA','VOTUPORANGA','FERNANDOPOLIS'],
   CASTELO_MARECHAL_OESTE:['BARUERI','SANTANA DE PARNAIBA','ITU','SOROCABA','VOTORANTIM','BOITUVA','TIETE','BOTUCATU','BAURU','LINS','MARILIA','BIRIGUI','ARACATUBA']
 };
+const SOUTH_AXIS = {
+  SP:['SAO PAULO','OSASCO','BARUERI','COTIA','ITAPECERICA DA SERRA','SAO ROQUE','SOROCABA','VOTORANTIM','ITAPETININGA','REGISTRO'],
+  PR:['CURITIBA','COLOMBO','SAO JOSE DOS PINHAIS','ARAUCARIA','CAMPO LARGO','PONTA GROSSA'],
+  SC:['JOINVILLE','JARAGUA DO SUL','BLUMENAU','ITAJAI','BALNEARIO CAMBORIU','BRUSQUE','FLORIANOPOLIS','SAO JOSE','PALHOCA','TUBARAO','CRICIUMA'],
+  RS:['TORRES','OSORIO','GRAVATAI','CANOAS','PORTO ALEGRE','NOVO HAMBURGO','SAO LEOPOLDO','CAXIAS DO SUL']
+};
+function southRank(r){
+  const ufBase={SP:0,PR:1000,SC:2000,RS:3000};
+  const list=SOUTH_AXIS[r.uf]||[], idx=list.indexOf(cityKey(r));
+  return (ufBase[r.uf]??9000)+(idx>=0?idx:500)+cepNum(r)/1000000000;
+}
 function axisInfo(r){
-  const c=cityKey(r);
+  const c=cityKey(r), selected=allowedUFs();
+
+  // Corredor Sul interestadual: quando PR/SC/RS são autorizados juntos,
+  // eles precisam pertencer ao MESMO bucket para poder compartilhar a mesma rota.
+  if(['PR','SC','RS'].includes(r.uf) && selected.some(u=>['PR','SC','RS'].includes(u))){
+    return {axis:'CORREDOR_SUL_BR116_BR101',rank:southRank(r)};
+  }
+  // SP só entra no corredor Sul quando a cidade pertence ao eixo de saída para o Sul.
+  if(r.uf==='SP' && selected.some(u=>['PR','SC','RS'].includes(u)) && (SOUTH_AXIS.SP||[]).includes(c)){
+    return {axis:'CORREDOR_SUL_BR116_BR101',rank:southRank(r)};
+  }
+
   for(const [axis,cities] of Object.entries(AXIS_CITY)){
     const idx=cities.indexOf(c);
     if(idx>=0)return {axis,rank:idx};
   }
-  // Fallback: keep unknown destinations together only by UF + coarse CEP band.
-  const cep=cepNum(r), band=Math.floor(cep/100000);
-  return {axis:`OUTROS_${r.uf}_${band}`,rank:cep};
+
+  // No modo interestadual o fallback não separa mais automaticamente por UF.
+  // UFs vizinhas autorizadas usam uma família comum; a ordenação continua progressiva por UF/CEP.
+  const cep=cepNum(r);
+  const family =
+    ['PR','SC','RS'].includes(r.uf) ? 'SUL' :
+    ['SP','RJ'].includes(r.uf) ? 'SUDESTE_LESTE' :
+    ['SP','MG'].includes(r.uf) ? 'SUDESTE_NORTE' : r.uf;
+  const ufRank={SP:0,RJ:1000,MG:1000,PR:1000,SC:2000,RS:3000,ES:2000};
+  return {axis:`INTERESTADUAL_${family}`,rank:(ufRank[r.uf]??5000)+cep/1000000000};
 }
 function buildCorridorRoutes(rows,maxStops){
   const buckets={};
