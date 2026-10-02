@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.7</title>
+<title>M'one | Roteirizador de Transporte V18.8</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -337,7 +337,7 @@ main{width:100%}
         <label><input id="optimize" type="checkbox" checked/> Otimizar sequência</label>
       </div>
       <input id="fallbackRate" type="hidden" value="2.10"/>
-      <div class="pricing-mini">
+      <div class="pricing-mini" id="pricingRuleCard">
         <b>Precificação M'one</b><br>
         Até 100 km: R$ 250,00 · acima de 100 km: fixo + excedente × tarifa UF.<br>
         Serviço: R$ 150,00 até 3 positivações + R$ 20,00 por excedente.
@@ -973,6 +973,22 @@ document.addEventListener('DOMContentLoaded',()=>{
  const mode=document.getElementById('routeMode'),panel=document.getElementById('corridorPanel'),uf=document.getElementById('ufFilter');
  function sync(){const c=mode.value==='CORREDOR';panel.style.display=c?'block':'none';uf.disabled=c||!rawRows.length;if(rawRows.length)updateRawSummary();}
  mode.addEventListener('change',sync);document.getElementById('ufChecks').addEventListener('change',()=>{if(rawRows.length)updateRawSummary()});sync();
+});
+</script>
+<script>
+function updatePricingRuleCard(){
+ const card=document.getElementById('pricingRuleCard'); if(!card)return;
+ const op=document.getElementById('operationMode')?.value||'FRETE';
+ const v=(document.getElementById('vehicleType')?.value||'FIORINO').toUpperCase();
+ if(op==='FRETE'&&v==='FIORINO') card.innerHTML='<b>Precificação — Somente Frete / Fiorino</b><br>Até 100 km: <b>R$ 320,00</b> · acima de 100 km: R$ 320,00 + excedente × tarifa UF.<br>Serviço: <b>R$ 0,00</b>.';
+ else if(op==='FRETE_SERVICO'&&v==='FIORINO') card.innerHTML='<b>Precificação — Frete + Serviço / Fiorino</b><br>Até 100 km: <b>R$ 250,00</b> · acima de 100 km: R$ 250,00 + excedente × tarifa UF.<br>Serviço: R$ 150,00 até 3 positivações + R$ 20,00 por excedente.';
+ else if(op==='FRETE') card.innerHTML='<b>Precificação — Somente Frete / '+v+'</b><br>Frete conforme tabela configurada para veículo/UF.<br>Serviço: <b>R$ 0,00</b>.';
+ else card.innerHTML='<b>Precificação — Frete + Serviço / '+v+'</b><br>Frete conforme tabela configurada para veículo/UF.<br>Serviço conforme regra de positivações.';
+}
+document.addEventListener('DOMContentLoaded',function(){
+ document.getElementById('operationMode')?.addEventListener('change',updatePricingRuleCard);
+ document.getElementById('vehicleType')?.addEventListener('change',updatePricingRuleCard);
+ updatePricingRuleCard();
 });
 </script>
 </body>
