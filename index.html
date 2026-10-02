@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>M'one | Roteirizador de Transporte V18.16</title>
+<title>M'one | Roteirizador de Transporte V18.17</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
@@ -487,6 +487,15 @@ function connectSupabase(url,key){
   if(!url||!key||!window.supabase)return null;
   sb=window.supabase.createClient(url,key);
   return sb;
+}
+function initSupabase(){
+  if(sb) return sb;
+  const c=getConnection();
+  if(!c?.url||!c?.anonKey||!window.supabase) return null;
+  return connectSupabase(c.url,c.anonKey);
+}
+function getSupabaseClient(){
+  return sb || initSupabase();
 }
 async function loadRemoteConfig(showError=false){
   const c=getConnection();
@@ -1111,8 +1120,8 @@ async function saveUser(){
 async function toggleUser(id,status){const client=getSupabaseClient(); if(!client)return; const {error}=await client.from('mone_usuarios').update({status:status==='ATIVO'?'INATIVO':'ATIVO',updated_at:new Date().toISOString()}).eq('id',id); if(error){$('usersStatus').textContent='Erro: '+error.message;return;} await loadUsers();}
 window.editUser=editUser; window.toggleUser=toggleUser;
 document.addEventListener('DOMContentLoaded',()=>{
-  $('openUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.add('show');loadUsers();});
-  $('closeUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.remove('show');});
+  $('openUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.add('open');loadUsers();});
+  $('closeUsersBtn')?.addEventListener('click',()=>{$('usersModal').classList.remove('open');});
   $('saveUserBtn')?.addEventListener('click',saveUser); $('clearUserBtn')?.addEventListener('click',clearUserForm);
 });
 </script>
