@@ -985,7 +985,7 @@ $('loadBtn').onclick=async()=>{
         const address=String(pick(r,['Endereço','Endereco'])||'').trim();
         const cep=(address.match(/\bCEP\s*:?\s*(\d{5}[-.]?\d{3})/i)||[])[1]||'';
         const uf=(address.match(/\b([A-Z]{2})\s*-\s*CEP/i)||[])[1]||'SP';
-        const city=(address.match(/-\s*([^\-]+)\s*-\s*[A-Z]{2}\s*-\s*CEP/i)||[])[1]?.trim()||'';
+        const city=(address.match(/-\s*([^\-]+)\s*-\s*[A-Z]{2}(?:\s*-\s*CEP|\s*$)/i)||[])[1]?.trim() || (String(pick(r,['Região','Regiao'])||'').toLowerCase().includes('capital')?'São Paulo':'São Paulo');
         const sindico=Number(pick(r,['Síndico','Sindico']))||0;
         const zelador=Number(pick(r,['Zelador']))||0;
         return {id:i+1,cnpj:null,customer:'Brindes | '+String(pick(r,['Região','Regiao'])||''),address,
@@ -1007,9 +1007,9 @@ $('loadBtn').onclick=async()=>{
         baseName:pick(r,['BASE DE RETIRADA','BASE RETIRADA']),
         baseAddress:'Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil'
       };
-    }).filter(r=>r.address&&r.city&&r.cep&&r.uf);
+    }).filter(r=>isBrindes ? Boolean(r.address&&String(r.address).trim()) : Boolean(r.address&&r.city&&r.cep&&r.uf));
     if(!rawRows.length)throw new Error('Não encontrei linhas válidas com endereço, cidade, CEP e UF.');
-    if(isBrindes){const total=rawRows.reduce((a,r)=>a+(r.brindes||0),0);$('brindesInfo').textContent=`${rawRows.length} endereços válidos | ${total} brindes | prontos para processar rotas`;}
+    if(isBrindes){const total=rawRows.reduce((a,r)=>a+(r.brindes||0),0);const semCep=rawRows.filter(r=>!r.cep).length;$('brindesInfo').textContent=`${rawRows.length} endereços importados | ${total} brindes | ${semCep} sem CEP (exigem validação de localização antes de roteirizar)`;}
     const ufs=[...new Set(rawRows.map(r=>r.uf))].sort();
     $('ufFilter').innerHTML='<option value="TODAS">Todas as UFs (separadas)</option>'+ufs.map(u=>`<option value="${u}">${u}</option>`).join('');
     $('ufChecks').innerHTML=ufs.map(u=>`<label class="uf-chip"><input type="checkbox" value="${u}"> ${u}</label>`).join('');
