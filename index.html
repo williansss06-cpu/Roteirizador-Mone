@@ -328,7 +328,8 @@ window.MONE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zbJy5pW_liLqoN2h7nXb4Q_po
     <button id="toggleSettings" class="cmd-settings" type="button">⚙ Parâmetros</button>
   </div>
 
-  <div class="fixed-origin"><b>Origem fixa:</b> Mundial Logistics — Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos/SP</div>
+  <div class="command-card" style="border-left:4px solid #f26a00;margin-top:10px"><b>🎁 Roteirização de brindes — importação independente</b><p class="small">Use a aba Endereços da planilha Brindes por Endereço 2026. O importador original de transporte permanece inalterado.</p><div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label>Planilha de brindes (.xlsx)</label><input type="file" id="brindesFile" accept=".xlsx,.xls"/></div><button id="loadBrindesBtn" type="button" style="width:auto;min-width:175px">Carregar brindes</button></div><div id="brindesInfo" class="small" style="margin-top:7px">Aguardando arquivo de brindes.</div></div>
+<div class="fixed-origin"><b>Origem fixa:</b> Mundial Logistics — Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos/SP</div>
 <div id="rawSummary" class="command-summary">Carregue a planilha para visualizar a demanda.</div>
 <div id="corridorPanel" class="corridor-panel" style="display:none"><b>UFs autorizadas no mesmo corredor</b> <span class="mode-badge">ANTI-ZIG-ZAG UF + CIDADE ATIVO</span><div id="ufChecks" class="uf-checks"></div><span>Ex.: SP + RJ ou PR + SC + RS. As UFs marcadas podem compartilhar a MESMA rota quando pertencem ao mesmo eixo rodoviário; o anti-zig-zag mantém o sentido de avanço.</span></div>
   <input id="origin" type="hidden" value="Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil"/>
@@ -964,12 +965,34 @@ function updateRawSummary(){
 $('ufFilter').onchange=updateRawSummary;
 $('maxStops').oninput=()=>{if(rawRows.length)updateRawSummary();};
 
+let activeImport='transporte';
+$('loadBrindesBtn').onclick=()=>{activeImport='brindes';$('loadBtn').click();};
+$('routeFile').addEventListener('change',()=>{activeImport='transporte';});
 $('loadBtn').onclick=async()=>{
   try{
-    const f=$('routeFile').files[0]; if(!f)throw new Error('Selecione a planilha crua de entregas.');
-    setStatus('Lendo planilha crua...');
-    const rows=await readExcel(f);
+    const isBrindes=activeImport==='brindes';
+    const f=$(isBrindes?'brindesFile':'routeFile').files[0]; if(!f)throw new Error(isBrindes?'Selecione a planilha de brindes.':'Selecione a planilha crua de entregas.');
+    setStatus('Lendo planilha '+(isBrindes?'de brindes':'de transporte')+'...');
+    let rows;
+    if(isBrindes){
+      const wb=XLSX.read(await f.arrayBuffer(),{type:'array'});
+      const sheet=wb.SheetNames.find(n=>norm(n)===norm('Endereços'));
+      if(!sheet)throw new Error('A planilha precisa conter a aba Endereços.');
+      rows=XLSX.utils.sheet_to_json(wb.Sheets[sheet],{defval:null});
+    }else rows=await readExcel(f);
     rawRows=rows.map((r,i)=>{
+      if(isBrindes){
+        const address=String(pick(r,['Endereço','Endereco'])||'').trim();
+        const cep=(address.match(/\bCEP\s*:?\s*(\d{5}[-.]?\d{3})/i)||[])[1]||'';
+        const uf=(address.match(/\b([A-Z]{2})\s*-\s*CEP/i)||[])[1]||'SP';
+        const city=(address.match(/-\s*([^\-]+)\s*-\s*[A-Z]{2}\s*-\s*CEP/i)||[])[1]?.trim()||'';
+        const sindico=Number(pick(r,['Síndico','Sindico']))||0;
+        const zelador=Number(pick(r,['Zelador']))||0;
+        return {id:i+1,cnpj:null,customer:'Brindes | '+String(pick(r,['Região','Regiao'])||''),address,
+          neighborhood:'',city,cep,uf,baseName:'Mundial Logistics',
+          baseAddress:'Estrada Velha Guarulhos–São Miguel, 1971, Guarulhos - SP, Brasil',
+          regiao:pick(r,['Região','Regiao']),sindico,zelador,brindes:Number(pick(r,['Total']))||sindico+zelador};
+      }
       const cep=pick(r,['CEP','CEP DESTINO','CEP_DESTINO']);
       const uf=norm(pick(r,['UF','UF DESTINO']))||ufFromCep(cep);
       return {
@@ -986,6 +1009,7 @@ $('loadBtn').onclick=async()=>{
       };
     }).filter(r=>r.address&&r.city&&r.cep&&r.uf);
     if(!rawRows.length)throw new Error('Não encontrei linhas válidas com endereço, cidade, CEP e UF.');
+    if(isBrindes){const total=rawRows.reduce((a,r)=>a+(r.brindes||0),0);$('brindesInfo').textContent=`${rawRows.length} endereços válidos | ${total} brindes | prontos para processar rotas`;}
     const ufs=[...new Set(rawRows.map(r=>r.uf))].sort();
     $('ufFilter').innerHTML='<option value="TODAS">Todas as UFs (separadas)</option>'+ufs.map(u=>`<option value="${u}">${u}</option>`).join('');
     $('ufChecks').innerHTML=ufs.map(u=>`<label class="uf-chip"><input type="checkbox" value="${u}"> ${u}</label>`).join('');
