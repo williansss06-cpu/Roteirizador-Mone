@@ -350,7 +350,7 @@ window.MONE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zbJy5pW_liLqoN2h7nXb4Q_po
       </div>
       <div class="setting-checks">
         <label><input id="roundTrip" type="checkbox"/> Retorno à base no KM</label>
-        <label><input id="optimize" type="checkbox" checked/> Otimizar sequência</label>
+        <label><input id="optimize" type="checkbox" disabled/> Otimização Advanced desativada para controle de custo</label>
       </div>
       <input id="fallbackRate" type="hidden" value="2.10"/>
       <div class="pricing-mini" id="pricingRuleCard">
@@ -363,7 +363,16 @@ window.MONE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zbJy5pW_liLqoN2h7nXb4Q_po
       <button id="exportBtn" class="secondary" disabled>Exportar Excel</button>
     </div>
   </div>
-  <div id="status" class="command-status">Aguardando planilha crua.</div>
+  <div style="padding:12px 20px;background:#fff8ee;border:1px solid #fed7aa;border-radius:10px;margin-top:12px">
+    <b>Controle de consultas Google</b>
+    <div class="small">Modo econômico padrão: mantém a ordem das cidades e usa o último endereço como destino. Não compara todos os destinos possíveis. Otimizar no Google pode aumentar a tarifa.</div>
+    <label>Limite de consultas por execução <input id="queryLimit" type="number" min="1" max="100" value="20" style="width:85px;padding:6px" /></label>
+    <label>Limite diário neste navegador <input id="dailyLimit" type="number" min="1" max="100" value="20" style="width:85px;padding:6px" /></label><div class="small">Contador local, compartilhado entre abas. Não é um teto financeiro da conta Google. Configure também as cotas no Google Cloud. O mapa só carrega ao clicar na rota.</div>
+    <button id="cancelCalc" type="button" class="secondary" disabled>Interromper</button>
+    <div id="queryUsage" class="small" role="status" aria-live="polite">Consultas nesta execução: 0 · Reutilizadas: 0 · Nesta aba: 0</div>
+    <div class="small">O limite vale apenas nesta aba e para este processamento. Não limita gastos de outros sistemas nem substitui as cotas do Google Cloud.</div>
+  </div>
+  <div id="status" class="command-status" role="status" aria-live="polite">Aguardando planilha crua.</div>
 </section>
 
 
@@ -544,13 +553,19 @@ function closeAdmin(){ $('configModal').classList.remove('open'); $('apiKey').ty
 
 const nval=v=>{ if(typeof v==='number')return v; if(v==null)return NaN; let s=String(v).replace(/[R$\s]/g,''); if(s.includes(',')&&s.includes('.'))s=s.replace(/\./g,'').replace(',','.'); else s=s.replace(',','.'); return parseFloat(s); };
 function setStatus(t){$('status').textContent=t}
+let googleLoadPromise;
 async function loadGoogle(){
-  if(window.google?.maps){googleReady=true;initMap();return;}
+  if(googleLoadPromise)return googleLoadPromise;
+  googleLoadPromise=loadGoogleOnce().catch(e=>{googleLoadPromise=null;throw e;});
+  return googleLoadPromise;
+}
+async function loadGoogleOnce(){
+  if(window.google?.maps){googleReady=true;if(!directionsService)directionsService=new google.maps.DirectionsService();return;}
   if(!$('apiKey').value.trim()) await loadRemoteConfig(false);
   const key=$('apiKey').value.trim();
   if(!key) throw new Error('Chave Google Maps não encontrada no Supabase. Abra ⚙ Parâmetros > Administrador.');
   return new Promise((resolve,reject)=>{
-    window.__gmcb=()=>{googleReady=true;initMap();resolve();}
+    window.__gmcb=()=>{googleReady=true;directionsService=new google.maps.DirectionsService();resolve();}
     const s=document.createElement('script');
     s.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&callback=__gmcb&libraries=geometry`;
     s.async=true;
@@ -616,33 +631,69 @@ function rateFor(km,uf,vehicle){
   }
   return {rate:nval($('fallbackRate').value)||0,n:0,confidence:'FALLBACK',base:`R$/km padrão configurado (${vehicle})`};
 }
-async function chooseLinearRoute(origin,stops){
-  // V5 não usa Geocoding API. Testa cada parada como possível destino final
-  // usando apenas Directions/Routes e escolhe o menor percurso total.
-  if(stops.length<=1)return {destination:stops[0],waypoints:[],preview:null};
-  let best=null;
-  for(let d=0; d<stops.length; d++){
-    const destination=stops[d];
-    const mids=stops.filter((_,i)=>i!==d);
-    try{
-      const res=await directions({
-        origin,destination,
-        waypoints:mids.map(x=>({location:x,stopover:true})),
-        optimizeWaypoints:true,
-        travelMode:google.maps.TravelMode.DRIVING,
-        avoidFerries:true
-      });
-      const rt=res.routes[0];
-      const meters=rt.legs.reduce((a,l)=>a+(l.distance?.value||0),0);
-      if(!best || meters<best.meters) best={destination,waypoints:mids.map(x=>({location:x,stopover:true})),preview:res,meters};
-    }catch(e){}
-    await new Promise(r=>setTimeout(r,90));
+// Agrupa cidades sem consultar APIs; respeita sequências travadas do planejamento.
+function prepareStops(stops,locked){
+  if(locked)return stops.slice();
+  const blocks=new Map();
+  for(const stop of stops){
+    const key=norm(cityFromFullAddress(stop));
+    if(!blocks.has(key))blocks.set(key,[]);
+    blocks.get(key).push(stop);
   }
-  if(best)return best;
-  // fallback sem chamada extra de geocodificação
-  return {destination:stops[stops.length-1],waypoints:stops.slice(0,-1).map(x=>({location:x,stopover:true})),preview:null};
+  return [...blocks.values()].flat();
 }
-function directions(req){return new Promise((resolve,reject)=>directionsService.route(req,(r,s)=>s==='OK'?resolve(r):reject(new Error(s))))}
+const routeCache=new Map();
+let calculationRunning=false;
+const DAILY_USAGE_KEY="frete_google_usage_v1";
+function dailyUsage(){
+  const day=new Date().toLocaleDateString("en-CA",{timeZone:"America/Sao_Paulo"});
+  const saved=JSON.parse(localStorage.getItem(DAILY_USAGE_KEY)||"null");
+  return saved?.day===day?saved:{day,count:0};
+}
+try{$("dailyLimit").value=localStorage.getItem("frete_google_daily_limit")||20;}catch(e){}
+$("dailyLimit").onchange=()=>{const v=Math.max(1,Math.min(100,Math.floor(Number($("dailyLimit").value)||20)));$("dailyLimit").value=v;localStorage.setItem("frete_google_daily_limit",v);updateQueryUsage();};
+let queryCount=0,cacheHits=0,sessionQueries=0,queryBudget=20,cancelRequested=false;
+function updateQueryUsage(){
+  $('queryUsage').textContent=`Consultas nesta execução: ${queryCount}/${queryBudget} · Reutilizadas: ${cacheHits} · Nesta aba: ${sessionQueries} · Hoje neste navegador: ${dailyUsage().count}/${$("dailyLimit").value}`;
+}
+$('cancelCalc').onclick=()=>{cancelRequested=true;setStatus('Interrompendo após a consulta em andamento...');};
+function stopError(code,message){const e=new Error(message);e.code=code;return e;}
+async function directions(req){
+  if(cancelRequested)throw stopError('CANCELLED','Processamento interrompido.');
+  const key=JSON.stringify(req), cached=routeCache.get(key);
+  if(cached && Date.now()-cached.time<15*60*1000){cacheHits++;updateQueryUsage();return cached.result;}
+  if(queryCount>=queryBudget)throw stopError('QUERY_LIMIT','Limite de consultas atingido. Revise as rotas antes de continuar.');
+  const send=async()=>{
+    if(cancelRequested)throw stopError('CANCELLED','Processamento interrompido.');
+    let usage;
+    try{usage=dailyUsage();}catch(e){throw stopError('DAILY_LIMIT','Não foi possível ler o contador diário. Consultas bloqueadas.');}
+    const limit=Math.min(Number($('dailyLimit').value)||20,Number(localStorage.getItem('frete_google_daily_limit'))||20);
+    if(usage.count>=limit)throw stopError('DAILY_LIMIT','Limite diário deste navegador atingido.');
+    usage.count++;
+    try{localStorage.setItem(DAILY_USAGE_KEY,JSON.stringify(usage));}catch(e){throw stopError('DAILY_LIMIT','Não foi possível salvar o contador. Consultas bloqueadas.');}
+    queryCount++;sessionQueries++;updateQueryUsage();
+    return requestDirections(req);
+  };
+  if(!navigator.locks)throw stopError('DAILY_LIMIT','Abra o arquivo em um site HTTPS ou localhost com navegador atualizado para proteger consultas entre abas.');
+  const result=await navigator.locks.request('frete-google-queries',send);
+  if(routeCache.size>=50)routeCache.delete(routeCache.keys().next().value);
+  routeCache.set(key,{time:Date.now(),result});
+  return result;
+}
+function requestDirections(req){
+  return new Promise((resolve,reject)=>{
+    // Consume também a Promise da API para evitar rejeições não tratadas.
+    const pending=directionsService.route(req,(r,s)=>{
+      if(s==='OK'){resolve(r);return;}
+      const error=new Error(s==='REQUEST_DENIED'
+        ? 'Google Maps recusou o cálculo (REQUEST_DENIED). Verifique o faturamento ativo no projeto da chave, a habilitação do serviço Directions e as restrições da chave para este site. Se o console informar “You must enable Billing”, habilite o faturamento no Google Cloud antes de tentar novamente.'
+        : s);
+      error.code=s;
+      reject(error);
+    });
+    if(pending && typeof pending.catch==='function')pending.catch(()=>{});
+  });
+}
 
 function cityFromFullAddress(addr){
   const p=String(addr||'').replace(', Brasil','').split(',').map(x=>x.trim()).filter(Boolean);
@@ -661,7 +712,7 @@ function compactCitySequence(addresses){
 
 async function calcRoute(row,idx){
   const origin=(row.origin||'').trim();
-  const stops=(row.stops&&row.stops.length)?row.stops:parseCities(row.cities,row.uf);
+  const stops=prepareStops((row.stops&&row.stops.length)?row.stops:parseCities(row.cities,row.uf),row.lockSequence);
   if(!origin)throw new Error('ORIGEM NÃO ENCONTRADA');
   if(!stops.length)throw new Error('SEM DESTINOS');
   const returnToOrigin=$('roundTrip').checked;
@@ -669,14 +720,13 @@ async function calcRoute(row,idx){
   if(returnToOrigin){
     destination=origin; waypoints=stops.map(x=>({location:x,stopover:true}));
   } else {
-    // "Linha reta": escolhe como destino final a parada geograficamente mais distante da Mundial.
-    // As demais são otimizadas pelo Google no caminho, evitando voltar para trás.
-    const straight=await chooseLinearRoute(origin,stops);
-    destination=straight.destination; waypoints=straight.waypoints;
-    var previewRoute=straight.preview;
+    destination=stops[stops.length-1];
+    waypoints=stops.slice(0,-1).map(location=>({location,stopover:true}));
   }
-  let res=previewRoute || await directions({
-    origin,destination,waypoints,optimizeWaypoints:(row.lockSequence?false:$('optimize').checked),
+  const useOptimization=false;
+  if(waypoints.length>10 && !useOptimization)throw new Error('Modo econômico aceita até 10 paradas intermediárias. Reduza positivações/rota ou habilite otimização Advanced.');
+  let res=await directions({
+    origin,destination,waypoints,optimizeWaypoints:useOptimization,
     travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
   });
   let rt=res.routes[0];
@@ -690,35 +740,7 @@ async function calcRoute(row,idx){
     orderedStops=order.map(i=>mids[i]).concat(destination);
   }
 
-  // ANTI-ZIG-ZAG POR CIDADE:
-  // usa a primeira ocorrência de cada cidade para definir a ordem dos blocos e
-  // mantém todos os PDVs dessa cidade juntos. Depois recalcula o percurso no
-  // Google com a sequência travada, portanto o KM exibido é o KM da rota corrigida.
-  const cityOrder=[];
-  const cityBlocks=new Map();
-  orderedStops.forEach(stop=>{
-    const key=norm(cityFromFullAddress(stop));
-    if(!cityBlocks.has(key)){ cityBlocks.set(key,[]); cityOrder.push(key); }
-    cityBlocks.get(key).push(stop);
-  });
-  const blockedStops=cityOrder.flatMap(key=>cityBlocks.get(key));
-  const changed=blockedStops.some((stop,i)=>stop!==orderedStops[i]);
-  if(changed && blockedStops.length>1){
-    orderedStops=blockedStops;
-    if(returnToOrigin){
-      destination=origin;
-      waypoints=orderedStops.map(x=>({location:x,stopover:true}));
-    } else {
-      destination=orderedStops[orderedStops.length-1];
-      waypoints=orderedStops.slice(0,-1).map(x=>({location:x,stopover:true}));
-    }
-    res=await directions({
-      origin,destination,waypoints,optimizeWaypoints:false,
-      travelMode:google.maps.TravelMode.DRIVING,avoidFerries:true
-    });
-    rt=res.routes[0];
-  }
-
+  // Cidades agrupadas antes da consulta. Uma única chamada por percurso.
   let meters=0, seconds=0;
   rt.legs.forEach(l=>{meters+=l.distance.value;seconds+=l.duration.value});
   const km=Math.round((meters/1000)*10)/10;
@@ -768,7 +790,7 @@ function render(){
   $('kTotal').textContent=money(freight+service);
 }
 window.changeVehicle=(i,v)=>{
-  const r=results[i]; if(!r)return;
+  const r=results[i]; if(!r||r.status!=='OK')return;
   r.vehicle=v;
   const rr=rateFor(r.km,r.uf,v), tariff=tariffFor(r.km,r.uf,v), toll=nval($('toll').value)||0, margin=(nval($('margin').value)||0)/100;
   const tableValue=tariff?tariff.value:(r.km*rr.rate);
@@ -779,11 +801,11 @@ window.changeVehicle=(i,v)=>{
   render();
 };
 window.changeDeliveries=(i,q)=>{
-  const r=results[i]; if(!r)return;
+  const r=results[i]; if(!r||r.status!=='OK')return;
   r.deliveries=Math.max(1,Number(q)||1); r.extraPos=Math.max(0,r.deliveries-3); r.serviceCost=$('operationMode').value==='FRETE_SERVICO' ? 150+r.extraPos*20 : 0; r.cost=(r.freightCost||0)+r.serviceCost; r.costPerDelivery=r.cost/r.deliveries; render();
 };
 window.showRoute=i=>{
-  const r=results[i]; if(!r?.directions)return; directionsRenderer.setDirections(r.directions);
+  const r=results[i]; if(!r?.directions)return; if(!map)initMap(); directionsRenderer.setDirections(r.directions);
   $('routeSummary').innerHTML=`<b>${r.route}</b> — ${r.sequence}<br>${r.vehicle} | ${r.deliveries} positivações | ${num(r.km)} km<br><b>Frete:</b> ${money(r.freightCost||0)} | <b>Serviço:</b> ${money(r.serviceCost||0)} | <b>Total:</b> ${money(r.cost)} | ${money(r.costPerDelivery)}/positivação<br><b>Cálculo do frete:</b> ${r.costBase}`;
 };
 
@@ -1020,29 +1042,43 @@ $('loadBtn').onclick=async()=>{
   }catch(e){setStatus('Erro: '+e.message)}
 };
 $('calcBtn').onclick=async()=>{
+  if(calculationRunning)return;
+  calculationRunning=true;
   try{
-    $('calcBtn').disabled=true; results=[];
+    $('calcBtn').disabled=true; $('exportBtn').disabled=true;
+    queryCount=0;cacheHits=0;cancelRequested=false;
+    queryBudget=Math.max(1,Math.min(100,Math.floor(Number($('queryLimit').value)||20)));
+    $('queryLimit').value=queryBudget;updateQueryUsage();$('cancelCalc').disabled=false;
+    results=[]; render();
+    if(directionsRenderer)directionsRenderer.set('directions',null);
+    $('routeSummary').textContent='Aguardando cálculo de uma rota válida.';
     const selectedUF=$('ufFilter').value, mode=$('routeMode').value;
     let selected;
     if(mode==='CORREDOR'){const aus=allowedUFs();if(!aus.length)throw new Error('Selecione ao menos uma UF autorizada para o corredor.');selected=rawRows.filter(r=>aus.includes(r.uf));}
     else selected=selectedUF==='TODAS'?rawRows:rawRows.filter(r=>r.uf===selectedUF);
-    const maxStops=Math.max(1,Math.min(20,Number($('maxStops').value)||8));
+    const maxStops=Math.max(1,Math.min(10,Number($('maxStops').value)||8));
     routeRows=mode==='CORREDOR'?buildCorridorRoutes(selected,maxStops):buildAutoRoutes(selected,maxStops);
     if(!routeRows.length)throw new Error('Nenhuma entrega encontrada para o filtro selecionado.');
+    setStatus(`${routeRows.length} rotas previstas. Modo econômico: até 1 consulta por rota. Limite: ${queryBudget} consultas; resultados iguais podem ser reutilizados por 15 minutos nesta aba.`);
+    if(!confirm(`${routeRows.length} rotas. Modo econômico: até 1 consulta por rota. Limite desta execução: ${queryBudget} consultas. Pode haver cobrança pelo Google. Continuar?`))return;
     await loadGoogle();
     for(let i=0;i<routeRows.length;i++){
+      if(cancelRequested)throw stopError('CANCELLED','Processamento interrompido.');
       setStatus(`Roteirizando ${i+1}/${routeRows.length}: ${routeRows[i].route}...`);
       try{results.push(await calcRoute(routeRows[i],i));}
       catch(e){
         const msg=String(e.message||e);
         results.push({...routeRows[i],idx:i,status:'ERRO: '+msg,km:0,rate:0,freightCost:0,serviceCost:0,cost:0,sequence:'ERRO DE PERCURSO — '+msg});
+        if(['REQUEST_DENIED','QUERY_LIMIT','DAILY_LIMIT','CANCELLED','OVER_QUERY_LIMIT','OVER_DAILY_LIMIT','INVALID_REQUEST'].includes(e.code)){render();throw e;}
       }
       render();
       await new Promise(r=>setTimeout(r,180));
     }
-    $('exportBtn').disabled=false;setStatus(`Concluído: ${results.filter(x=>x.status==='OK').length}/${results.length} rotas processadas.`);
-    if(results.find(x=>x.status==='OK'))showRoute(results.findIndex(x=>x.status==='OK'));
-  }catch(e){setStatus('Erro: '+e.message)} finally{$('calcBtn').disabled=false}
+    const successCount=results.filter(x=>x.status==='OK').length;
+    $('exportBtn').disabled=successCount===0;
+    setStatus(successCount===results.length ? `Concluído: ${successCount}/${results.length} rotas processadas.` : `Cálculo com falhas: ${successCount}/${results.length} rotas processadas. Confira os erros na tabela.`);
+    // Abrir o mapa exige clique explícito na rota.
+  }catch(e){setStatus('Erro: '+e.message)} finally{calculationRunning=false;$('calcBtn').disabled=false;$('cancelCalc').disabled=true;$('exportBtn').disabled=!results.some(r=>r.status==='OK');updateQueryUsage();}
 };
 $('exportBtn').onclick=()=>{
   const data=results.map(r=>({
@@ -1167,7 +1203,12 @@ async function sairDoSistema(){
     ['mone_user','mone_usuario','mone_session','usuario_logado','user_session','auth_session','login_session','mone_auth_user'].forEach(k=>localStorage.removeItem(k));
     sessionStorage.clear();
   }finally{
-    window.location.replace('./login.html');
+    // Reabre o documento atual: o site não possui login.html.
+    // Mantém o caminho correto tanto no GitHub Pages quanto no arquivo local.
+    const entryUrl=new URL(window.location.href);
+    entryUrl.search='';
+    entryUrl.hash='';
+    window.location.replace(entryUrl.href);
   }
 }
 document.addEventListener('DOMContentLoaded',()=>{
